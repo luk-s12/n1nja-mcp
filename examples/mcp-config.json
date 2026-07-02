@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "n1nja": {
+      "command": "node",
+      "args": ["/absolute/path/to/n1nja-mcp/dist/index.js"]
+    }
+  }
+}

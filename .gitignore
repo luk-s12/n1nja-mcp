@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+.mcp.json
+
+# Environment — NEVER commit this
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+# Exception: the sample log referenced by the README must ship with the repo
+!examples/sample.log
+
+# Generated reports
+report/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Claude
+.claude

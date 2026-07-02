@@ -1,0 +1,257 @@
+{
+  "summary": {
+    "totalQueries": 17,
+    "uniqueNormalizedQueries": 3,
+    "detectedIssues": 4,
+    "issuesByType": {
+      "N_PLUS_1": 1,
+      "MISSING_PAGINATION": 2,
+      "OVER_FETCHING": 1
+    },
+    "issuesBySeverity": {
+      "HIGH": 3,
+      "LOW": 1
+    },
+    "totalExecutionTimeMs": 0,
+    "analysisStartedAt": "2026-06-28T01:56:31.194Z",
+    "analysisCompletedAt": "2026-06-28T01:56:31.207Z",
+    "logFile": "/path/to/application.log",
+    "linesProcessed": 169
+  },
+  "issues": [
+    {
+      "type": "N_PLUS_1",
+      "severity": "HIGH",
+      "query": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+      "executions": 15,
+      "estimatedExtraQueries": 14,
+      "parentQuery": "select g1_0.id, g1_0.name, g1_0.description from groups g1_0",
+      "description": "Query executed 15 times with only parameter values changing — classic N+1 pattern.",
+      "recommendation": "Consider using JOIN FETCH, @EntityGraph, DTO projections with a single JOIN query, or Hibernate Batch Fetching (@BatchSize / hibernate.default_batch_fetch_size).",
+      "evidence": [
+        "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=1",
+        "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=2",
+        "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=3",
+        "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=4",
+        "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=5"
+      ],
+      "lineNumbers": [
+        19,
+        29,
+        39,
+        49,
+        59,
+        69,
+        79,
+        89,
+        99,
+        109,
+        119,
+        129,
+        139,
+        149,
+        159
+      ]
+    },
+    {
+      "type": "MISSING_PAGINATION",
+      "severity": "HIGH",
+      "query": "select g1_0.id, g1_0.name, g1_0.description from groups g1_0",
+      "description": "This query fetches all rows without pagination. On large tables this can cause out-of-memory errors and severe performance degradation.",
+      "recommendation": "Add Spring Data Pageable parameter to the repository method and use Page<T> / Slice<T> return types. In JPQL, add LIMIT/OFFSET or use setMaxResults() on the Query object.",
+      "evidence": [
+        "select g1_0.id, g1_0.name, g1_0.description from groups g1_0"
+      ],
+      "lineNumbers": [
+        8
+      ]
+    },
+    {
+      "type": "MISSING_PAGINATION",
+      "severity": "HIGH",
+      "query": "select * from expenses",
+      "description": "This query fetches all rows without pagination. On large tables this can cause out-of-memory errors and severe performance degradation.",
+      "recommendation": "Add Spring Data Pageable parameter to the repository method and use Page<T> / Slice<T> return types. In JPQL, add LIMIT/OFFSET or use setMaxResults() on the Query object.",
+      "evidence": [
+        "select * from expenses"
+      ],
+      "lineNumbers": [
+        164
+      ]
+    },
+    {
+      "type": "OVER_FETCHING",
+      "severity": "LOW",
+      "query": "select * from expenses",
+      "description": "Found 1 unique query pattern(s) using SELECT * executed 1 time(s). Loading all columns wastes memory and network bandwidth when only a few fields are needed.",
+      "recommendation": "Replace SELECT * with explicit column lists using DTO/interface projections. In Spring Data, use interface-based projections or @Query with a constructor expression: SELECT new com.example.dto.UserDto(u.id, u.name) FROM User u.",
+      "evidence": [
+        "select * from expenses"
+      ],
+      "lineNumbers": [
+        164
+      ],
+      "executions": 1
+    }
+  ],
+  "hibernateStatistics": {
+    "rawLines": [
+      "16 JDBC statements executed",
+      "150 entities loaded",
+      "16 collections loaded"
+    ],
+    "jdbcStatementsExecuted": 16,
+    "entityLoadsCount": 150,
+    "collectionLoadsCount": 16
+  },
+  "topQueries": [
+    {
+      "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+      "executions": [
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=1",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 19,
+          "timestamp": "2024-01-15 10:30:00.025",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=2",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 29,
+          "timestamp": "2024-01-15 10:30:00.030",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=3",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 39,
+          "timestamp": "2024-01-15 10:30:00.035",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=4",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 49,
+          "timestamp": "2024-01-15 10:30:00.040",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=5",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 59,
+          "timestamp": "2024-01-15 10:30:00.045",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=6",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 69,
+          "timestamp": "2024-01-15 10:30:00.050",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=7",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 79,
+          "timestamp": "2024-01-15 10:30:00.055",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=8",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 89,
+          "timestamp": "2024-01-15 10:30:00.060",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=9",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 99,
+          "timestamp": "2024-01-15 10:30:00.065",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=10",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 109,
+          "timestamp": "2024-01-15 10:30:00.070",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=11",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 119,
+          "timestamp": "2024-01-15 10:30:00.075",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=12",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 129,
+          "timestamp": "2024-01-15 10:30:00.080",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=13",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 139,
+          "timestamp": "2024-01-15 10:30:00.085",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=14",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 149,
+          "timestamp": "2024-01-15 10:30:00.090",
+          "parameters": []
+        },
+        {
+          "rawSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=15",
+          "normalizedSql": "select m1_0.id, m1_0.name, m1_0.email, m1_0.group_id from member m1_0 where m1_0.group_id=?",
+          "lineNumber": 159,
+          "timestamp": "2024-01-15 10:30:00.100",
+          "parameters": []
+        }
+      ],
+      "totalExecutionTimeMs": 0,
+      "maxExecutionTimeMs": 0,
+      "avgExecutionTimeMs": 0,
+      "totalRows": 0
+    },
+    {
+      "normalizedSql": "select g1_0.id, g1_0.name, g1_0.description from groups g1_0",
+      "executions": [
+        {
+          "rawSql": "select g1_0.id, g1_0.name, g1_0.description from groups g1_0",
+          "normalizedSql": "select g1_0.id, g1_0.name, g1_0.description from groups g1_0",
+          "lineNumber": 8,
+          "timestamp": "2024-01-15 10:30:00.012",
+          "parameters": [
+            "1"
+          ]
+        }
+      ],
+      "totalExecutionTimeMs": 0,
+      "maxExecutionTimeMs": 0,
+      "avgExecutionTimeMs": 0,
+      "totalRows": 0
+    },
+    {
+      "normalizedSql": "select * from expenses",
+      "executions": [
+        {
+          "rawSql": "select * from expenses",
+          "normalizedSql": "select * from expenses",
+          "lineNumber": 164,
+          "timestamp": "2024-01-15 10:30:01.500",
+          "parameters": []
+        }
+      ],
+      "totalExecutionTimeMs": 0,
+      "maxExecutionTimeMs": 0,
+      "avgExecutionTimeMs": 0,
+      "totalRows": 0
+    }
+  ]
+}

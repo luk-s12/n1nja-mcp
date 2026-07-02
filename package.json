@@ -1,0 +1,72 @@
+{
+  "name": "n1nja-mcp",
+  "version": "1.0.0",
+  "description": "MCP server that detects Hibernate/JPA N+1 queries, slow queries, deadlocks and other anti-patterns in Spring Boot apps — and points to the exact line of code.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "n1nja": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README-ES.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prebuild": "npm run clean",
+    "build": "tsc",
+    "dev": "ts-node src/index.ts",
+    "start": "node dist/index.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests --ext .ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "hibernate",
+    "jpa",
+    "n+1",
+    "spring-boot",
+    "sql",
+    "performance",
+    "claude"
+  ],
+  "author": "Lucas Oliver Cornero",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luk-s12/n1nja-mcp.git"
+  },
+  "homepage": "https://github.com/luk-s12/n1nja-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/luk-s12/n1nja-mcp/issues"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "dotenv": "^16.4.5",
+    "mysql2": "^3.9.7",
+    "pg": "^8.11.5",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.6",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

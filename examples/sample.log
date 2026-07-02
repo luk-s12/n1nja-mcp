@@ -1,0 +1,169 @@
+2024-01-15 10:30:00.001 DEBUG org.hibernate.SQL -
+    select
+        g1_0.id,
+        g1_0.name,
+        g1_0.description
+    from
+        groups g1_0
+2024-01-15 10:30:00.012 TRACE org.hibernate.orm.jdbc.bind - binding parameter [1] as [BIGINT] - [1]
+2024-01-15 10:30:00.020 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=1
+2024-01-15 10:30:00.025 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=2
+2024-01-15 10:30:00.030 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=3
+2024-01-15 10:30:00.035 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=4
+2024-01-15 10:30:00.040 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=5
+2024-01-15 10:30:00.045 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=6
+2024-01-15 10:30:00.050 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=7
+2024-01-15 10:30:00.055 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=8
+2024-01-15 10:30:00.060 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=9
+2024-01-15 10:30:00.065 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=10
+2024-01-15 10:30:00.070 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=11
+2024-01-15 10:30:00.075 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=12
+2024-01-15 10:30:00.080 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=13
+2024-01-15 10:30:00.085 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=14
+2024-01-15 10:30:00.090 DEBUG org.hibernate.SQL -
+    select
+        m1_0.id,
+        m1_0.name,
+        m1_0.email,
+        m1_0.group_id
+    from
+        member m1_0
+    where
+        m1_0.group_id=15
+2024-01-15 10:30:00.100 DEBUG org.hibernate.SQL -
+    select
+        *
+    from
+        expenses
+2024-01-15 10:30:01.500 INFO  org.hibernate.stat.internal.StatisticsImpl -
+    Session Metrics {
+        16 JDBC statements executed
+        150 entities loaded
+        16 collections loaded
+    }
