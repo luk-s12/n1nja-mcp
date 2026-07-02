@@ -6,6 +6,7 @@ import { explainQuery } from './tools/explain-query.tool';
 import { generateN1Report } from './tools/generate-report.tool';
 import { findMissingIndexes } from './tools/find-missing-indexes.tool';
 import { analyzeProjectForNPlusOne } from '../../core/code-analysis/project-analyzer';
+import { setupLogging } from '../../core/setup/logging-configurator';
 import { toMarkdown } from '../../core/reporting/markdown-reporter';
 import { toPdf } from '../../core/reporting/pdf-reporter';
 
@@ -331,6 +332,47 @@ const findMissingIndexesTool = defineTool({
   },
 });
 
+const setupLoggingTool = defineTool({
+  name: 'autoconfig',
+  description:
+    'Auto-configures the logging N1nja needs to capture Hibernate/JPA SQL, adapting to the project. ' +
+    'Detects whether the project ships a custom Logback config (logback-spring.xml / logback.xml): ' +
+    'if so, it edits that XML (adding a file appender → logs/application.log, the Hibernate loggers, ' +
+    'and the <root> appender-ref), because Spring Boot ignores the logging.* properties when Logback is present. ' +
+    'Otherwise it adds the logging.file.name + logging.level.* properties to application.properties/yml — ' +
+    'the base file and every application-{profile} variant. ' +
+    'If no config exists at all, it creates src/main/resources/application.properties. ' +
+    'It reuses a custom encoder/layout (e.g. a PII-masking layout) when one is found, and is idempotent. ' +
+    'Files are written in place. Run this before full_scan. ' +
+    'If projectRoot is omitted, defaults to the current working directory.',
+  schema: z.object({
+    projectRoot: z
+      .string()
+      .optional()
+      .describe(
+        'Absolute path to the root of the Spring Boot project (where src/main/resources is). ' +
+          'Defaults to the current working directory.',
+      ),
+  }),
+  run: ({ projectRoot = process.cwd() }) => {
+    const result = setupLogging(projectRoot);
+    return {
+      content: [
+        json({
+          scenario: result.scenario,
+          logFile: result.logFile,
+          changes: result.changes.map((c) => ({
+            file: c.file,
+            action: c.action,
+            notes: c.notes,
+          })),
+        }),
+        text('\n\n---\n\n' + result.markdownReport),
+      ],
+    };
+  },
+});
+
 export const tools: ToolDef[] = [
   analyzeHibernateLogTool,
   monitorLogTool,
@@ -339,4 +381,5 @@ export const tools: ToolDef[] = [
   fullScanTool,
   explainSqlTool,
   findMissingIndexesTool,
+  setupLoggingTool,
 ];

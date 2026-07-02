@@ -58,6 +58,8 @@ The MCP reads a Hibernate log file, so your Spring Boot app needs to write one. 
 
 ### Spring Boot Logging Setup
 
+> 💡 **Prefer to skip the manual setup?** Run the [`autoconfig`](#autoconfig) tool once — it detects whether your project uses Logback or plain properties and wires up everything below for you. The rest of this section explains what it configures (and how to do it by hand).
+
 Add to your `application.yml` — this is what feeds the MCP:
 
 ```yaml
@@ -191,6 +193,7 @@ With logging enabled, restart your MCP client and you're ready to go:
 
 | Command | Type | Key parameters (all optional) | Description |
 |---------|------|-------------------------------|-------------|
+| `autoconfig` | Setup | `projectRoot` (def. cwd) | Auto-configures the logging N1nja needs. Detects a custom Logback config and edits the XML, or adds the properties to `application.properties`/`yml`. **Run this once, before `full_scan`.** |
 | `full_scan` | ⭐ All-in-one | `logFile` (def. `logs/application.log`), `projectRoot` (def. cwd), `outputFile`, `config` | Parses log + scans source code + writes `.md` report with ready-to-copy fixes. **Start here.** |
 | `analyze_hibernate_log` | Log | `logFile` (def. `logs/application.log`), `config` | Detects N+1, duplicate queries, large result sets, slow queries, cartesian products, SELECT * over-fetching, and deadlocks. |
 | `find_n1_in_code` | Analysis | `projectRoot` (def. cwd) | Scans Java source and pinpoints the exact entity, field, and method causing each issue. |
@@ -198,6 +201,26 @@ With logging enabled, restart your MCP client and you're ready to go:
 | `show_report` | Query | `format` (def. `json`) | Returns the last generated report without re-parsing. Formats: `json`, `markdown`, `both`, `pdf`. |
 | `monitor_log` | Real-time | `action` (def. `start`), `logFile` (def. `logs/application.log`) | Tails the log live. Actions: `start`, `stop`, `status`. Use `show_report` to see results. |
 | `explain_sql` | Database | `sql`, `maxQueriesToExplain` (def. 3), `envFile`, `projectRoot` | Runs `EXPLAIN ANALYZE` and analyzes the execution plan. Credentials from `.env`, env vars, or Spring `application.properties`. |
+
+---
+
+### `autoconfig`
+
+Sets up the logging N1nja needs to capture Hibernate SQL — so you don't have to edit any config by hand. It detects how your project is wired and does the right thing:
+
+- **Custom Logback config** (`logback-spring.xml` / `logback.xml`): edits the XML — adds a file appender writing `logs/application.log`, the Hibernate loggers, and the `<root>` `appender-ref`. (Spring Boot ignores the `logging.*` properties when Logback is present, so the XML is the only thing that works.) If your config uses a custom encoder/layout — e.g. a `MaskingPatternLayout` to redact PII — that same layout is reused for the file appender, so nothing sensitive leaks to disk.
+- **No Logback**: adds `logging.file.name` and the Hibernate `logging.level.*` keys to `application.properties`/`application.yml` — the base file **and every** `application-{profile}` variant.
+- **No config at all**: creates `src/main/resources/application.properties` with the required settings.
+
+It writes the files in place and is **idempotent** — running it again makes no further changes. After it runs, restart your app, exercise the endpoints that trigger queries, then run `full_scan`.
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `projectRoot` | No | current working directory | Root of the Spring Boot project (where `src/main/resources` lives). |
+
+```json
+{ "projectRoot": "/path/to/your/spring-boot-project" }
+```
 
 ---
 
