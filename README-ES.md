@@ -82,6 +82,46 @@ logging:
 
 > **¿No querés tocar el `pattern` de logs?** No hace falta. N1nja entiende el **formato por defecto de Spring Boot** (`<timestamp>  NIVEL <PID> --- [thread] logger : mensaje`), así que con habilitar los niveles de arriba alcanza — no necesitás definir un `logging.pattern` custom. Si igual usás un pattern propio con el thread justo después de la hora (`<timestamp> [thread] NIVEL ...`), también funciona.
 
+#### Proyectos con un `logback-spring.xml` propio
+
+> ⚠️ **Si tu proyecto ya trae su propio `logback-spring.xml` (o `logback.xml`), las properties `logging.file.name` y `logging.level` de arriba se ignoran.** Spring Boot le cede el control del logging a tu configuración de Logback, así que el archivo de log nunca aparece y `full_scan` reporta **0 queries**. En ese caso, configurá Logback directamente:
+
+```xml
+<configuration>
+
+    <appender name="consoleAppender" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger : %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Escribe el archivo que lee el MCP -->
+    <appender name="fileAppender" class="ch.qos.logback.core.FileAppender">
+        <file>logs/application.log</file>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger : %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Loggers de Hibernate que el MCP necesita -->
+    <logger name="org.hibernate.SQL" level="DEBUG"/>
+    <logger name="org.hibernate.orm.jdbc.bind" level="TRACE"/>
+    <logger name="org.hibernate.stat" level="DEBUG"/>
+
+    <root level="info">
+        <appender-ref ref="consoleAppender"/>
+        <appender-ref ref="fileAppender"/>
+    </root>
+
+</configuration>
+```
+
+> 📌 Si el proyecto ya usa un encoder/layout custom (ej. un `MaskingPatternLayout` para enmascarar PII), reutilizá ese mismo layout en el `fileAppender` en lugar del `pattern` genérico, para no filtrar datos sensibles al archivo.
+
+**Notas (para ambos casos):**
+- La carpeta `logs/` se crea automáticamente al arrancar la app, relativa al working directory donde corre el proceso.
+- El log debe contener queries reales: hay que ejercitar los endpoints/flujos que disparen consultas **antes** de correr `full_scan`, o el reporte dará 0 queries.
+
 ### Umbrales de detección
 
 Pasá un objeto `config` a `analyze_hibernate_log` para sobreescribir los valores por defecto:

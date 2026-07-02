@@ -82,6 +82,46 @@ logging:
 
 > **Don't want to touch your log `pattern`?** You don't have to. N1nja understands Spring Boot's **default log format** (`<timestamp>  LEVEL <PID> --- [thread] logger : message`), so enabling the levels above is enough — no custom `logging.pattern` required. A custom pattern with the thread right after the timestamp (`<timestamp> [thread] LEVEL ...`) is supported too.
 
+#### Projects with a custom `logback-spring.xml`
+
+> ⚠️ **If your project already ships its own `logback-spring.xml` (or `logback.xml`), the `logging.file.name` and `logging.level` properties above are ignored.** Spring Boot hands logging control over to your Logback config, so the log file never appears and `full_scan` reports **0 queries**. In that case, configure Logback directly instead:
+
+```xml
+<configuration>
+
+    <appender name="consoleAppender" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger : %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Writes the file the MCP reads -->
+    <appender name="fileAppender" class="ch.qos.logback.core.FileAppender">
+        <file>logs/application.log</file>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger : %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Hibernate loggers the MCP needs -->
+    <logger name="org.hibernate.SQL" level="DEBUG"/>
+    <logger name="org.hibernate.orm.jdbc.bind" level="TRACE"/>
+    <logger name="org.hibernate.stat" level="DEBUG"/>
+
+    <root level="info">
+        <appender-ref ref="consoleAppender"/>
+        <appender-ref ref="fileAppender"/>
+    </root>
+
+</configuration>
+```
+
+> 📌 If your project already uses a custom encoder/layout (e.g. a `MaskingPatternLayout` to redact PII), reuse that same layout in the `fileAppender` instead of the generic `pattern` above, so you don't leak sensitive data to the file.
+
+**Notes (both scenarios):**
+- The `logs/` folder is created automatically when the app starts, relative to the working directory the process runs from.
+- The log must contain real queries: exercise the endpoints/flows that trigger the queries **before** running `full_scan`, or the report will show 0 queries.
+
 ### Detection Thresholds
 
 Pass a `config` object to `analyze_hibernate_log` to override defaults:
