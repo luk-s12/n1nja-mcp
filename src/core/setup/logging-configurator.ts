@@ -150,11 +150,11 @@ export function configureLogbackFile(file: string): FileChange {
 
   // 1. File appender ----------------------------------------------------------
   if (!hasN1njaAppender) {
-    const encoderInner = detectCustomEncoderInner(xml);
-    if (encoderInner) {
+    const customEncoder = detectCustomEncoderInner(xml);
+    if (customEncoder) {
       notes.push('Reused the existing custom encoder/layout for the file appender (avoids leaking masked data).');
     }
-    const appenderXml = buildFileAppenderXml(appenderName, encoderInner);
+    const appenderXml = buildFileAppenderXml(appenderName, customEncoder);
     xml = insertBeforeClosingConfiguration(xml, appenderXml);
     notes.push(`Added file appender "${appenderName}" → ${DEFAULT_LOG_FILE}.`);
   } else {
@@ -199,32 +199,56 @@ function hasLogger(xml: string, loggerName: string): boolean {
   return new RegExp(`<logger[^>]*name=["']${escaped}["']`).test(xml);
 }
 
+/** Encoder Logback needs when the encoder content is a <layout> element. */
+const LAYOUT_WRAPPING_ENCODER = 'ch.qos.logback.core.encoder.LayoutWrappingEncoder';
+
+interface CustomEncoder {
+  /** Inner XML of the encoder: the whole <layout> block, or a <pattern>. */
+  inner: string;
+  /** class for the generated <encoder>; null → Logback's default encoder. */
+  encoderClass: string | null;
+}
+
 /**
- * Returns the inner XML of the FIRST encoder found (its <pattern> or the whole
- * <layout .../> block) so it can be reused. Returns null when no custom encoder
- * exists, in which case the generic pattern is used.
+ * Returns the reusable encoder content of the FIRST encoder found (its
+ * <pattern> or the whole <layout .../> block). Returns null when no custom
+ * encoder exists, in which case the generic pattern is used.
  */
-function detectCustomEncoderInner(xml: string): string | null {
+function detectCustomEncoderInner(xml: string): CustomEncoder | null {
   const layout = xml.match(/<layout\b[\s\S]*?<\/layout>/i);
   if (layout && /class\s*=/.test(layout[0])) {
-    return layout[0].trim();
+    // The default PatternLayoutEncoder rejects a nested <layout>, so the
+    // generated encoder must carry the original encoder's class (or an
+    // explicit LayoutWrappingEncoder when none is declared).
+    return { inner: layout[0].trim(), encoderClass: enclosingEncoderClass(xml, layout[0]) };
   }
   const pattern = xml.match(/<pattern>([\s\S]*?)<\/pattern>/i);
   if (pattern && pattern[1].trim() && pattern[1].trim() !== GENERIC_PATTERN) {
-    return `<pattern>${pattern[1].trim()}</pattern>`;
+    return { inner: `<pattern>${pattern[1].trim()}</pattern>`, encoderClass: null };
   }
   return null;
 }
 
-/** Builds the <appender> block, reusing `encoderInner` when provided. */
-function buildFileAppenderXml(name: string, encoderInner: string | null): string {
-  const inner = encoderInner ?? `<pattern>${GENERIC_PATTERN}</pattern>`;
+/** class attribute of the <encoder> that contains `layoutBlock`. */
+function enclosingEncoderClass(xml: string, layoutBlock: string): string {
+  for (const encoder of xml.matchAll(/<encoder\b([^>]*)>([\s\S]*?)<\/encoder>/gi)) {
+    if (!encoder[2].includes(layoutBlock)) continue;
+    const cls = encoder[1].match(/class\s*=\s*["']([^"']+)["']/i);
+    return cls ? cls[1] : LAYOUT_WRAPPING_ENCODER;
+  }
+  return LAYOUT_WRAPPING_ENCODER;
+}
+
+/** Builds the <appender> block, reusing the custom encoder when provided. */
+function buildFileAppenderXml(name: string, custom: CustomEncoder | null): string {
+  const inner = custom?.inner ?? `<pattern>${GENERIC_PATTERN}</pattern>`;
+  const encoderOpen = custom?.encoderClass ? `<encoder class="${custom.encoderClass}">` : '<encoder>';
   return [
     '',
     '    <!-- Added by N1nja: writes the file the MCP reads -->',
     `    <appender name="${name}" class="ch.qos.logback.core.FileAppender">`,
     `        <file>${DEFAULT_LOG_FILE}</file>`,
-    '        <encoder>',
+    `        ${encoderOpen}`,
     `            ${inner}`,
     '        </encoder>',
     '    </appender>',

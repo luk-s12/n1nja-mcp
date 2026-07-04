@@ -105,6 +105,60 @@ describe('setupLogging — logback branch', () => {
     // The file appender must carry the masking layout, not the generic pattern.
     const fileAppender = xml.match(/<appender name="n1njaFileAppender"[\s\S]*?<\/appender>/)![0];
     expect(fileAppender).toContain('com.acme.MaskingPatternLayout');
+    // A <layout> inside a class-less <encoder> would resolve to the default
+    // PatternLayoutEncoder, which rejects setLayout and breaks app startup.
+    expect(fileAppender).toContain('<encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">');
+  });
+
+  it('copies the original encoder class when reusing a wrapped custom layout', () => {
+    writeProjectFile(
+      `${RES}/logback.xml`,
+      `<configuration>
+    <appender name="consoleAppender" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="com.acme.MaskingPatternLayout">
+                <pattern>\${CONSOLE_LOG_PATTERN}</pattern>
+            </layout>
+        </encoder>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="consoleAppender"/>
+    </root>
+</configuration>
+`,
+    );
+
+    setupLogging(tmpDir);
+    const xml = read(`${RES}/logback.xml`);
+
+    const fileAppender = xml.match(/<appender name="n1njaFileAppender"[\s\S]*?<\/appender>/)![0];
+    expect(fileAppender).toContain('<encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">');
+    expect(fileAppender).toContain('com.acme.MaskingPatternLayout');
+  });
+
+  it('does not add an encoder class when reusing a plain custom pattern', () => {
+    writeProjectFile(
+      `${RES}/logback.xml`,
+      `<configuration>
+    <appender name="consoleAppender" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss} %msg%n</pattern>
+        </encoder>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="consoleAppender"/>
+    </root>
+</configuration>
+`,
+    );
+
+    setupLogging(tmpDir);
+    const xml = read(`${RES}/logback.xml`);
+
+    const fileAppender = xml.match(/<appender name="n1njaFileAppender"[\s\S]*?<\/appender>/)![0];
+    expect(fileAppender).toContain('<pattern>%d{HH:mm:ss} %msg%n</pattern>');
+    expect(fileAppender).toContain('<encoder>');
+    expect(fileAppender).not.toContain('<encoder class=');
   });
 
   it('expands a self-closing <root/> and wires the ref', () => {
