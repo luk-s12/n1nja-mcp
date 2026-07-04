@@ -58,6 +58,8 @@ El MCP lee un archivo de log de Hibernate, así que tu app Spring Boot tiene que
 
 ### Logging de Spring Boot
 
+> 💡 **¿Preferís saltarte la configuración manual?** Corré la herramienta [`autoconfig`](#autoconfig) una vez — detecta si tu proyecto usa Logback o properties simples y te deja armado todo lo de abajo. El resto de esta sección explica qué configura (y cómo hacerlo a mano).
+
 Agregá esto a tu `application.yml` — es lo que alimenta al MCP:
 
 ```yaml
@@ -81,6 +83,46 @@ logging:
 > **Tip:** Nunca habilitás `TRACE` en producción. Usá un perfil de Spring dedicado (`dev`, `local`) para esto.
 
 > **¿No querés tocar el `pattern` de logs?** No hace falta. N1nja entiende el **formato por defecto de Spring Boot** (`<timestamp>  NIVEL <PID> --- [thread] logger : mensaje`), así que con habilitar los niveles de arriba alcanza — no necesitás definir un `logging.pattern` custom. Si igual usás un pattern propio con el thread justo después de la hora (`<timestamp> [thread] NIVEL ...`), también funciona.
+
+#### Proyectos con un `logback-spring.xml` propio
+
+> ⚠️ **Si tu proyecto ya trae su propio `logback-spring.xml` (o `logback.xml`), las properties `logging.file.name` y `logging.level` de arriba se ignoran.** Spring Boot le cede el control del logging a tu configuración de Logback, así que el archivo de log nunca aparece y `full_scan` reporta **0 queries**. En ese caso, configurá Logback directamente:
+
+```xml
+<configuration>
+
+    <appender name="consoleAppender" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger : %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Escribe el archivo que lee el MCP -->
+    <appender name="fileAppender" class="ch.qos.logback.core.FileAppender">
+        <file>logs/application.log</file>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger : %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Loggers de Hibernate que el MCP necesita -->
+    <logger name="org.hibernate.SQL" level="DEBUG"/>
+    <logger name="org.hibernate.orm.jdbc.bind" level="TRACE"/>
+    <logger name="org.hibernate.stat" level="DEBUG"/>
+
+    <root level="info">
+        <appender-ref ref="consoleAppender"/>
+        <appender-ref ref="fileAppender"/>
+    </root>
+
+</configuration>
+```
+
+> 📌 Si el proyecto ya usa un encoder/layout custom (ej. un `MaskingPatternLayout` para enmascarar PII), reutilizá ese mismo layout en el `fileAppender` en lugar del `pattern` genérico, para no filtrar datos sensibles al archivo.
+
+**Notas (para ambos casos):**
+- La carpeta `logs/` se crea automáticamente al arrancar la app, relativa al working directory donde corre el proceso.
+- El log debe contener queries reales: hay que ejercitar los endpoints/flujos que disparen consultas **antes** de correr `full_scan`, o el reporte dará 0 queries.
 
 ### Umbrales de detección
 
@@ -151,6 +193,7 @@ Con el logging habilitado, reiniciá tu cliente MCP y ya estás listo:
 
 | Comando | Tipo | Parámetros clave (todos opcionales) | Descripción |
 |---------|------|-------------------------------------|-------------|
+| `autoconfig` | Setup | `projectRoot` (def. cwd) | Auto-configura el logging que N1nja necesita. Detecta si hay un Logback propio y edita el XML, o agrega las properties a `application.properties`/`yml`. **Corré esto una vez, antes de `full_scan`.** |
 | `full_scan` | ⭐ Todo-en-uno | `logFile` (def. `logs/application.log`), `projectRoot` (def. cwd), `outputFile`, `config` | Parsea el log + escanea el código + escribe un `.md` con fixes listos para copiar. **Empezá por acá.** |
 | `analyze_hibernate_log` | Log | `logFile` (def. `logs/application.log`), `config` | Detecta N+1, queries duplicadas, resultados grandes, queries lentas, productos cartesianos, SELECT * y deadlocks. |
 | `find_n1_in_code` | Análisis | `projectRoot` (def. cwd) | Escanea el código Java y encuentra la entidad, campo y método exacto que causa cada problema. |
@@ -158,6 +201,26 @@ Con el logging habilitado, reiniciá tu cliente MCP y ya estás listo:
 | `show_report` | Consulta | `format` (def. `json`) | Devuelve el último reporte sin re-parsear. Formatos: `json`, `markdown`, `both`, `pdf`. |
 | `monitor_log` | Tiempo real | `action` (def. `start`), `logFile` (def. `logs/application.log`) | Hace tail del log en vivo. Acciones: `start`, `stop`, `status`. Usá `show_report` para ver los resultados. |
 | `explain_sql` | Base de datos | `sql`, `maxQueriesToExplain` (def. 3), `envFile`, `projectRoot` | Ejecuta `EXPLAIN ANALYZE` y analiza el plan de ejecución. Credenciales desde `.env`, variables de entorno o el `application.properties` de Spring. |
+
+---
+
+### `autoconfig`
+
+Configura el logging que N1nja necesita para capturar el SQL de Hibernate — así no tenés que editar ninguna config a mano. Detecta cómo está armado tu proyecto y hace lo correcto:
+
+- **Logback propio** (`logback-spring.xml` / `logback.xml`): edita el XML — agrega un file appender que escribe `logs/application.log`, los loggers de Hibernate y el `appender-ref` en el `<root>`. (Cuando hay Logback, Spring Boot ignora las properties `logging.*`, así que el XML es lo único que funciona.) Si tu config usa un encoder/layout custom —por ejemplo un `MaskingPatternLayout` para enmascarar PII— se reutiliza ese mismo layout en el file appender, para no filtrar datos sensibles al disco.
+- **Sin Logback**: agrega `logging.file.name` y los `logging.level.*` de Hibernate a `application.properties`/`application.yml` — el archivo base **y todas** las variantes `application-{profile}`.
+- **Sin ninguna config**: crea `src/main/resources/application.properties` con lo necesario.
+
+Escribe los archivos in-place y es **idempotente** — correrlo de nuevo no hace más cambios. Después de correrlo, reiniciá tu app, ejercitá los endpoints que disparan queries, y corré `full_scan`.
+
+| Parámetro | Requerido | Por defecto | Descripción |
+|---|---|---|---|
+| `projectRoot` | No | directorio de trabajo actual | Raíz del proyecto Spring Boot (donde está `src/main/resources`). |
+
+```json
+{ "projectRoot": "/ruta/a/tu-proyecto-spring-boot" }
+```
 
 ---
 

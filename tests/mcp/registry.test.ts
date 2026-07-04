@@ -6,6 +6,7 @@ describe('mcp tool registry', () => {
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
       'analyze_hibernate_log',
+      'autoconfig',
       'explain_sql',
       'find_missing_indexes',
       'find_n1_in_code',

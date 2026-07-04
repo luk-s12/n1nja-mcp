@@ -227,6 +227,16 @@ console.log('       level:');
 console.log('         org.hibernate.SQL: DEBUG');
 console.log('         org.hibernate.orm.jdbc.bind: TRACE');
 console.log('');
+console.log(`     ${c.yellow}⚠  ${isEs
+  ? 'Si tu proyecto ya trae un logback-spring.xml (o logback.xml) propio, estas'
+  : 'If your project already ships its own logback-spring.xml (or logback.xml), these'}${c.reset}`);
+console.log(`     ${c.yellow}${isEs
+  ? 'properties se ignoran y full_scan dará 0 queries. Configurá Logback directamente:'
+  : 'properties are ignored and full_scan will report 0 queries. Configure Logback directly:'}${c.reset}`);
+console.log(`     ${isEs
+  ? 'ver la sección "Proyectos con un logback-spring.xml propio" en el README-ES.md.'
+  : 'see the "Projects with a custom logback-spring.xml" section in the README.md.'}`);
+console.log('');
 console.log(`  2. ${isEs ? 'Reiniciá Claude Desktop o abrí una nueva sesión de Claude Code' : 'Restart Claude Desktop or open a new Claude Code session'}`);
 console.log('');
 console.log(`  3. ${isEs ? 'Probalo:' : 'Try it:'}`);
