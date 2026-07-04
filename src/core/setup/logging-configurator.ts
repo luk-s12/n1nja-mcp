@@ -153,6 +153,9 @@ export function configureLogbackFile(file: string): FileChange {
     const customEncoder = detectCustomEncoderInner(xml);
     if (customEncoder) {
       notes.push('Reused the existing custom encoder/layout for the file appender (avoids leaking masked data).');
+      if (customEncoder.colorStripped) {
+        notes.push('Stripped color converters (%clr/%highlight/…) from the reused pattern so the log file stays free of ANSI escapes.');
+      }
     }
     const appenderXml = buildFileAppenderXml(appenderName, customEncoder);
     xml = insertBeforeClosingConfiguration(xml, appenderXml);
@@ -207,26 +210,127 @@ interface CustomEncoder {
   inner: string;
   /** class for the generated <encoder>; null → Logback's default encoder. */
   encoderClass: string | null;
+  /** True when color converters were stripped from the reused pattern. */
+  colorStripped: boolean;
 }
 
 /**
  * Returns the reusable encoder content of the FIRST encoder found (its
  * <pattern> or the whole <layout .../> block). Returns null when no custom
- * encoder exists, in which case the generic pattern is used.
+ * encoder exists, in which case the generic pattern is used. Patterns are
+ * de-colorized: console patterns often use %clr/%highlight converters whose
+ * ANSI escapes would pollute the log file and break parsing.
  */
 function detectCustomEncoderInner(xml: string): CustomEncoder | null {
   const layout = xml.match(/<layout\b[\s\S]*?<\/layout>/i);
   if (layout && /class\s*=/.test(layout[0])) {
+    let colorStripped = false;
+    const inner = layout[0].trim().replace(/<pattern>([\s\S]*?)<\/pattern>/gi, (whole, p) => {
+      const cleaned = cleanPatternForFile(p.trim(), xml);
+      if (cleaned === null) return whole;
+      colorStripped = true;
+      return `<pattern>${cleaned}</pattern>`;
+    });
     // The default PatternLayoutEncoder rejects a nested <layout>, so the
     // generated encoder must carry the original encoder's class (or an
     // explicit LayoutWrappingEncoder when none is declared).
-    return { inner: layout[0].trim(), encoderClass: enclosingEncoderClass(xml, layout[0]) };
+    return { inner, encoderClass: enclosingEncoderClass(xml, layout[0]), colorStripped };
   }
   const pattern = xml.match(/<pattern>([\s\S]*?)<\/pattern>/i);
   if (pattern && pattern[1].trim() && pattern[1].trim() !== GENERIC_PATTERN) {
-    return { inner: `<pattern>${pattern[1].trim()}</pattern>`, encoderClass: null };
+    const raw = pattern[1].trim();
+    const cleaned = cleanPatternForFile(raw, xml);
+    return {
+      inner: `<pattern>${cleaned ?? raw}</pattern>`,
+      encoderClass: null,
+      colorStripped: cleaned !== null,
+    };
   }
   return null;
+}
+
+/**
+ * Resolves ${property} references against the XML's <property> declarations
+ * and strips color converters. Returns the cleaned pattern, or null when the
+ * pattern carries no colors — in that case the original text (including any
+ * ${property} indirection) should be kept as is.
+ */
+function cleanPatternForFile(pattern: string, xml: string): string | null {
+  const resolved = resolvePropertyRefs(pattern, xml);
+  const cleaned = stripColorConverters(resolved);
+  return cleaned === resolved ? null : cleaned;
+}
+
+/** Substitutes ${name} refs declared as <property name value> in the XML. */
+function resolvePropertyRefs(pattern: string, xml: string): string {
+  const props: Record<string, string> = {};
+  for (const tag of xml.matchAll(/<property\b[^>]*>/gi)) {
+    const name = tag[0].match(/name\s*=\s*["']([^"']+)["']/i)?.[1];
+    const value = tag[0].match(/value\s*=\s*["']([^"']+)["']/i)?.[1];
+    if (name && value !== undefined) props[name] = value;
+  }
+
+  let resolved = pattern;
+  for (let depth = 0; depth < 10; depth++) {
+    const next = resolved.replace(/\$\{([\w.-]+)(?::-[^}]*)?\}/g, (whole, name) =>
+      props[name] !== undefined ? props[name] : whole,
+    );
+    if (next === resolved) break;
+    resolved = next;
+  }
+  return resolved;
+}
+
+/** Logback/Spring Boot converters that only add ANSI color to their content. */
+const COLOR_CONVERTERS = new Set([
+  'clr', 'highlight', 'black', 'red', 'green', 'yellow', 'blue', 'magenta',
+  'cyan', 'white', 'gray', 'boldRed', 'boldGreen', 'boldYellow', 'boldBlue',
+  'boldMagenta', 'boldCyan', 'boldWhite',
+]);
+
+/** Replaces %clr(X){color} / %highlight(X) / %red(X) … with X, recursively. */
+function stripColorConverters(pattern: string): string {
+  let out = '';
+  let i = 0;
+  while (i < pattern.length) {
+    if (pattern[i] === '%') {
+      const name = pattern.slice(i + 1).match(/^([A-Za-z]+)\(/)?.[1];
+      if (name && COLOR_CONVERTERS.has(name)) {
+        const open = i + 1 + name.length;
+        const close = matchingParen(pattern, open);
+        if (close !== -1) {
+          out += stripColorConverters(pattern.slice(open + 1, close));
+          i = close + 1;
+          // Drop the optional {color} modifier that follows the group.
+          if (pattern[i] === '{') {
+            const brace = pattern.indexOf('}', i);
+            if (brace !== -1) i = brace + 1;
+          }
+          continue;
+        }
+      }
+    }
+    out += pattern[i];
+    i++;
+  }
+  return out;
+}
+
+/** Index of the ')' matching the '(' at `open`, honoring \-escapes; -1 if none. */
+function matchingParen(s: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '\\') {
+      i++;
+    } else if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
 }
 
 /** class attribute of the <encoder> that contains `layoutBlock`. */

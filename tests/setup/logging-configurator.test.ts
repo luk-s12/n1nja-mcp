@@ -136,6 +136,92 @@ describe('setupLogging — logback branch', () => {
     expect(fileAppender).toContain('com.acme.MaskingPatternLayout');
   });
 
+  it('strips %clr converters and resolves the property ref for the file appender', () => {
+    writeProjectFile(
+      `${RES}/logback.xml`,
+      `<configuration>
+    <property name="CONSOLE_LOG_PATTERN"
+              value="%clr(%5p) [\${app-name},%X{X-Amzn-Request-Id}] [dd.trace_id=%X{dd.trace_id:-0}] %clr(---){faint} %clr(%logger{35}){cyan} %clr(:){faint} %m%n%wEx"/>
+    <appender name="consoleAppender" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="com.acme.MaskingPatternLayout">
+                <pattern>\${CONSOLE_LOG_PATTERN}</pattern>
+            </layout>
+        </encoder>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="consoleAppender"/>
+    </root>
+</configuration>
+`,
+    );
+
+    setupLogging(tmpDir);
+    const xml = read(`${RES}/logback.xml`);
+
+    const fileAppender = xml.match(/<appender name="n1njaFileAppender"[\s\S]*?<\/appender>/)![0];
+    // Layout + encoder class preserved, but the pattern is inlined without colors.
+    expect(fileAppender).toContain('com.acme.MaskingPatternLayout');
+    expect(fileAppender).toContain('<encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">');
+    expect(fileAppender).toContain(
+      '<pattern>%5p [${app-name},%X{X-Amzn-Request-Id}] [dd.trace_id=%X{dd.trace_id:-0}] --- %logger{35} : %m%n%wEx</pattern>',
+    );
+    expect(fileAppender).not.toContain('%clr');
+    // The console appender keeps its original colored pattern.
+    const consoleAppender = xml.match(/<appender name="consoleAppender"[\s\S]*?<\/appender>/)![0];
+    expect(consoleAppender).toContain('${CONSOLE_LOG_PATTERN}');
+  });
+
+  it('strips Logback native color converters from an inline pattern', () => {
+    writeProjectFile(
+      `${RES}/logback.xml`,
+      `<configuration>
+    <appender name="consoleAppender" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss} %highlight(%-5level) %cyan(%logger{15}) %boldRed(%X{err}) %msg%n</pattern>
+        </encoder>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="consoleAppender"/>
+    </root>
+</configuration>
+`,
+    );
+
+    setupLogging(tmpDir);
+    const xml = read(`${RES}/logback.xml`);
+
+    const fileAppender = xml.match(/<appender name="n1njaFileAppender"[\s\S]*?<\/appender>/)![0];
+    expect(fileAppender).toContain(
+      '<pattern>%d{HH:mm:ss} %-5level %logger{15} %X{err} %msg%n</pattern>',
+    );
+  });
+
+  it('keeps a ${property} pattern reference untouched when it has no colors', () => {
+    writeProjectFile(
+      `${RES}/logback.xml`,
+      `<configuration>
+    <property name="FILE_LOG_PATTERN" value="%d{yyyy-MM-dd} %-5level %logger : %msg%n"/>
+    <appender name="consoleAppender" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>\${FILE_LOG_PATTERN}</pattern>
+        </encoder>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="consoleAppender"/>
+    </root>
+</configuration>
+`,
+    );
+
+    setupLogging(tmpDir);
+    const xml = read(`${RES}/logback.xml`);
+
+    const fileAppender = xml.match(/<appender name="n1njaFileAppender"[\s\S]*?<\/appender>/)![0];
+    // No colors → the indirection is preserved, not inlined.
+    expect(fileAppender).toContain('<pattern>${FILE_LOG_PATTERN}</pattern>');
+  });
+
   it('does not add an encoder class when reusing a plain custom pattern', () => {
     writeProjectFile(
       `${RES}/logback.xml`,
