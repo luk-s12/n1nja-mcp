@@ -6,7 +6,7 @@ import { explainQuery } from './tools/explain-query.tool';
 import { generateN1Report } from './tools/generate-report.tool';
 import { findMissingIndexes } from './tools/find-missing-indexes.tool';
 import { analyzeProjectForNPlusOne } from '../../core/code-analysis/project-analyzer';
-import { setupLogging } from '../../core/setup/logging-configurator';
+import { setupLogging, undoLogging } from '../../core/setup/logging-configurator';
 import { toMarkdown } from '../../core/reporting/markdown-reporter';
 import { toPdf } from '../../core/reporting/pdf-reporter';
 
@@ -344,6 +344,11 @@ const setupLoggingTool = defineTool({
     'If no config exists at all, it creates src/main/resources/application.properties. ' +
     'It reuses a custom encoder/layout (e.g. a PII-masking layout) when one is found, and is idempotent. ' +
     'Files are written in place. Run this before full_scan. ' +
+    "Use action 'undo' to revert every change autoconfig made (before committing your repo): " +
+    'injected blocks are marker-delimited, so undo removes exactly what was added. ' +
+    'If the project imports Spring Cloud Config (configserver:), the report warns that dev/prod ' +
+    'levels may come from the central config repo and suggests LOGGING_LEVEL_* env vars as a ' +
+    'non-invasive alternative. ' +
     'If projectRoot is omitted, defaults to the current working directory.',
   schema: z.object({
     projectRoot: z
@@ -353,14 +358,31 @@ const setupLoggingTool = defineTool({
         'Absolute path to the root of the Spring Boot project (where src/main/resources is). ' +
           'Defaults to the current working directory.',
       ),
+    action: z
+      .enum(['apply', 'undo'])
+      .optional()
+      .describe("'apply' (default) configures the logging; 'undo' reverts every N1nja change."),
   }),
-  run: ({ projectRoot = process.cwd() }) => {
+  run: ({ projectRoot = process.cwd(), action = 'apply' }) => {
+    if (action === 'undo') {
+      const result = undoLogging(projectRoot);
+      return {
+        content: [
+          json({
+            action: 'undo',
+            changes: result.changes.map((c) => ({ file: c.file, action: c.action, notes: c.notes })),
+          }),
+          text('\n\n---\n\n' + result.markdownReport),
+        ],
+      };
+    }
     const result = setupLogging(projectRoot);
     return {
       content: [
         json({
           scenario: result.scenario,
           logFile: result.logFile,
+          configServerFiles: result.configServerFiles,
           changes: result.changes.map((c) => ({
             file: c.file,
             action: c.action,
