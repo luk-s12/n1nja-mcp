@@ -5,6 +5,7 @@ import { Issue } from '../../domain/models/issue.model';
 import { scanEntities, ScannedEntity } from './entity-scanner';
 import { scanAssociationUsages, scanDuplicateRepositoryCalls, scanUnpaginatedRepositoryCalls, scanGenericEntityUsages, scanCartesianJpqlUsages, scanRepositoryMethodCallers, scanLogMessageOrigin, AssociationUsage, CartesianJpqlUsage } from './usage-scanner';
 import { scanRepositoryUsages, RepositoryUsage } from './repository-scanner';
+import { buildQueryFingerprintIndex, matchQueryFingerprint, QueryFingerprintMatch } from './query-fingerprint';
 import { suggestFixes, FixSuggestion } from './fix-suggester';
 import { extractTableName } from '../parsing/sql-normalizer';
 import { traceCallChain, CallChain } from './call-chain-tracer';
@@ -21,6 +22,12 @@ export interface ProjectFinding {
   usages: AssociationUsage[];
   /** Repository methods / @Query definitions related to the issue */
   repositoryUsages: RepositoryUsage[];
+  /**
+   * Native @Query methods whose SQL fingerprint matches the issue query —
+   * a direct, deterministic attribution (vs. the heuristic entity matching).
+   * More than one entry means the same SQL is declared in several methods.
+   */
+  queryFingerprintMatches?: QueryFingerprintMatch[];
   /** Repository @Query methods with 2+ JOIN FETCH (Cartesian product root cause) */
   cartesianJpqlUsages?: CartesianJpqlUsage[];
   /** Call chains from HTTP entry point down to the trigger (up to 3) */
@@ -73,6 +80,12 @@ export function analyzeProjectForNPlusOne(
   // Scanned once: the repository catalog doesn't change between issues.
   const repositoryUsages = scanRepositoryUsages(resolvedRoot);
 
+  // Native @Query SQL indexed by fingerprint for direct log↔code attribution.
+  const fingerprintIndex = buildQueryFingerprintIndex(repositoryUsages);
+  if (fingerprintIndex.size > 0) {
+    process.stderr.write(`✴️  ${fingerprintIndex.size} native @Query method(s) fingerprinted\n`);
+  }
+
   for (const issue of report.issues) {
     const tableName = extractTableName(issue.query);
     let entity = tableName
@@ -95,8 +108,19 @@ export function analyzeProjectForNPlusOne(
       }
     }
 
-    // ── Issue-specific scanners (only when log-context origin not confirmed) ──
-    if (originConfidence !== 'confirmed') {
+    // ── Native @Query fingerprint: direct SQL→method attribution ─────────────
+    // When the logged SQL matches the text of a nativeQuery @Query, the origin
+    // is that repository method — no entity/field heuristics needed. Its
+    // callers become the code locations shown in the report.
+    const queryFingerprintMatches = matchQueryFingerprint(issue.query, fingerprintIndex);
+    if (originConfidence !== 'confirmed' && queryFingerprintMatches.length > 0) {
+      for (const match of queryFingerprintMatches.slice(0, 2)) {
+        usages.push(...scanRepositoryMethodCallers(resolvedRoot, match.usage.methodName, entity?.className));
+      }
+    }
+
+    // ── Issue-specific scanners (only when no stronger attribution exists) ──
+    if (originConfidence !== 'confirmed' && usages.length === 0) {
       if (issue.type === 'POSSIBLE_CARTESIAN_PRODUCT') {
         // Find ALL @Query methods with 2+ JOIN FETCH in the project
         const allCartesianJpql = scanCartesianJpqlUsages(resolvedRoot, entity?.className);
@@ -211,7 +235,7 @@ export function analyzeProjectForNPlusOne(
       collectionType:
         entity?.associations.find((a) => a.fieldName === suspectedField)?.annotationType ?? 'unknown',
       isInLoop: loopUsage !== undefined,
-      repositoryMethod: usages[0]?.methodName,
+      repositoryMethod: queryFingerprintMatches[0]?.usage.methodName ?? usages[0]?.methodName,
       hasMultipleBagCollections,
       usedColumns: issue.type === 'OVER_FETCHING' ? issue.usedColumns : undefined,
     });
@@ -230,12 +254,11 @@ export function analyzeProjectForNPlusOne(
       }
     }
 
-    const relevantRepositoryUsages = selectRelevantRepositoryUsages(
-      repositoryUsages,
-      issue.query,
-      entity,
-      suspectedField,
-    );
+    // Matched methods come first; the heuristic selection fills the rest.
+    const relevantRepositoryUsages = dedupeRepositoryUsages([
+      ...queryFingerprintMatches.map((m) => m.usage),
+      ...selectRelevantRepositoryUsages(repositoryUsages, issue.query, entity, suspectedField),
+    ]).slice(0, 6);
 
     findings.push({
       issue,
@@ -243,10 +266,11 @@ export function analyzeProjectForNPlusOne(
       suspectedField,
       usages,
       repositoryUsages: relevantRepositoryUsages,
+      queryFingerprintMatches: queryFingerprintMatches.length > 0 ? queryFingerprintMatches : undefined,
       cartesianJpqlUsages: cartesianJpqlUsages.length > 0 ? cartesianJpqlUsages : undefined,
       callChains,
       fixes,
-      explanation: buildExplanation(issue, entity, suspectedField, relevantRepositoryUsages, cartesianJpqlUsages),
+      explanation: buildExplanation(issue, entity, suspectedField, relevantRepositoryUsages, cartesianJpqlUsages, queryFingerprintMatches),
       originConfidence,
     });
   }
@@ -387,14 +411,42 @@ function extractWhereColumn(sql: string): string | undefined {
   return match ? match[1].toLowerCase() : undefined;
 }
 
+function dedupeRepositoryUsages(usages: RepositoryUsage[]): RepositoryUsage[] {
+  const seen = new Set<string>();
+  return usages.filter((u) => {
+    const key = `${u.filePath}:${u.lineNumber}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function buildExplanation(
   issue: Issue,
   entity: ScannedEntity | undefined,
   field: string | undefined,
   repositoryUsages: RepositoryUsage[] = [],
   cartesianJpqlUsages: CartesianJpqlUsage[] = [],
+  queryFingerprintMatches: QueryFingerprintMatch[] = [],
 ): string {
   const parts: string[] = [];
+
+  if (queryFingerprintMatches.length > 0) {
+    const first = queryFingerprintMatches[0];
+    const suffix = first.confidence === 'no-pagination' ? ' (paginated by Pageable)' : '';
+    parts.push(
+      `The SQL matches the native @Query \`${first.usage.repositoryName}.${first.usage.methodName}()\` ` +
+        `(${first.usage.relativeFilePath}:${first.usage.lineNumber})${suffix}.`,
+    );
+    if (queryFingerprintMatches.length > 1) {
+      parts.push(
+        `The same SQL is also declared in: ${queryFingerprintMatches
+          .slice(1)
+          .map((m) => `\`${m.usage.repositoryName}.${m.usage.methodName}()\``)
+          .join(', ')}.`,
+      );
+    }
+  }
 
   if (issue.type === 'POSSIBLE_CARTESIAN_PRODUCT') {
     const fanOutTables = issue.fanOutTables ?? [];
@@ -475,6 +527,19 @@ function renderProjectMarkdown(
       lines.push(`**Entity:** \`${finding.suspectedEntity.className}\``);
       if (finding.suspectedField) {
         lines.push(`**Field:** \`${finding.suspectedField}\``);
+      }
+      lines.push('');
+    }
+
+    if (finding.queryFingerprintMatches && finding.queryFingerprintMatches.length > 0) {
+      lines.push('**Native @Query match:**');
+      lines.push('');
+      for (const m of finding.queryFingerprintMatches.slice(0, 3)) {
+        const label = m.confidence === 'exact' ? 'exact match' : 'match (paginated)';
+        lines.push(
+          `- \`${m.usage.repositoryName}.${m.usage.methodName}()\` — ` +
+            `\`${m.usage.relativeFilePath}:${m.usage.lineNumber}\` (${label})`,
+        );
       }
       lines.push('');
     }

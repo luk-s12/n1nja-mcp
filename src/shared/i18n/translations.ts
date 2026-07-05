@@ -111,6 +111,9 @@ export interface LangStrings {
     labelEvidence: (n: number) => string;
     labelEntity: string;
     labelField: string;
+    labelNativeQueryMatch: string;
+    matchExact: string;
+    matchPaginated: string;
     labelOriginCode: string;
     labelSuggestedOriginCode: string;
     colFile: string;
@@ -304,6 +307,9 @@ export const EN: LangStrings = {
     labelEvidence: (n) => `Evidence from log (${n} sample${n !== 1 ? 's' : ''})`,
     labelEntity: '**Entity:**',
     labelField: '→ field',
+    labelNativeQueryMatch: '**🎯 Native @Query match (SQL fingerprint):**',
+    matchExact: 'exact match',
+    matchPaginated: 'match (paginated by Pageable)',
     labelOriginCode: '**📍 Origin in source code (confirmed from log):**',
     labelSuggestedOriginCode: '**🔍 Possible origin in source code (suggested — log context not matched):**',
     colFile: 'File',
@@ -538,6 +544,9 @@ export const ES: LangStrings = {
     labelEvidence: (n) => `Evidencia del log (${n} muestra${n !== 1 ? 's' : ''})`,
     labelEntity: '**Entidad:**',
     labelField: '-> campo',
+    labelNativeQueryMatch: '**🎯 Match de @Query nativa (huella SQL):**',
+    matchExact: 'match exacto',
+    matchPaginated: 'match (paginada por Pageable)',
     labelOriginCode: '**📍 Origen en el codigo fuente (confirmado desde el log):**',
     labelSuggestedOriginCode: '**🔍 Posible origen en el codigo fuente (sugerido — contexto del log no encontrado):**',
     colFile: 'Archivo',
