@@ -214,9 +214,13 @@ Configura el logging que N1nja necesita para capturar el SQL de Hibernate — as
 
 Escribe los archivos in-place y es **idempotente** — correrlo de nuevo no hace más cambios. Después de correrlo, reiniciá tu app, ejercitá los endpoints que disparan queries, y corré `full_scan`.
 
+Antes de tocar nada verifica que el proyecto realmente use **JPA/Hibernate** (dependencias del build, nombre del parent corporativo, imports `javax`/`jakarta.persistence`, `@Entity`, `JpaRepository`). Un servicio reactivo WebFlux + MongoDB o una lambda Python/Node recibe un reporte de **"no aplica"** en vez de config de logging inútil — pasá `force: true` para forzarlo igual. `undo` nunca se bloquea.
+
 | Parámetro | Requerido | Por defecto | Descripción |
 |---|---|---|---|
 | `projectRoot` | No | directorio de trabajo actual | Raíz del proyecto Spring Boot (donde está `src/main/resources`). |
+| `action` | No | `apply` | `apply` configura el logging; `undo` revierte todos los cambios de N1nja. |
+| `force` | No | `false` | Salta la verificación de tipo de proyecto y configura igual. |
 
 ```json
 { "projectRoot": "/ruta/a/tu-proyecto-spring-boot" }
@@ -236,6 +240,7 @@ Todos los parámetros tienen un valor por defecto razonable, así que podés lla
 | `projectRoot` | No | directorio de trabajo actual | Raíz del proyecto Spring Boot (donde está `src/main/java`). Por defecto, el directorio donde se inició el proceso del servidor MCP. |
 | `outputFile` | No | `report/n1nja-report_{timestamp}.md` | Ruta de salida personalizada para el `.md`. Cada corrida escribe un archivo nuevo con timestamp. |
 | `config` | No | — | Override de umbrales de detección (ver *Umbrales de detección*). |
+| `force` | No | `false` | Salta la verificación de tipo de proyecto. Por defecto, los proyectos sin JPA/Hibernate (servicios reactivos WebFlux/MongoDB, lambdas Python/Node, …) se omiten con un reporte de "no aplica". |
 
 ```json
 { "logFile": "logs/application.log", "projectRoot": "/ruta/a/tu-proyecto-spring-boot" }

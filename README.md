@@ -214,9 +214,13 @@ Sets up the logging N1nja needs to capture Hibernate SQL — so you don't have t
 
 It writes the files in place and is **idempotent** — running it again makes no further changes. After it runs, restart your app, exercise the endpoints that trigger queries, then run `full_scan`.
 
+Before touching anything it checks that the project actually uses **JPA/Hibernate** (build file dependencies, corporate parent naming, `javax`/`jakarta.persistence` imports, `@Entity`, `JpaRepository`). A reactive WebFlux + MongoDB service or a Python/Node lambda gets a **"not applicable"** report instead of useless logging config — pass `force: true` to override. `undo` is never gated.
+
 | Parameter | Required | Default | Description |
 |---|---|---|---|
 | `projectRoot` | No | current working directory | Root of the Spring Boot project (where `src/main/resources` lives). |
+| `action` | No | `apply` | `apply` configures the logging; `undo` reverts every N1nja change. |
+| `force` | No | `false` | Skip the project-type check and configure anyway. |
 
 ```json
 { "projectRoot": "/path/to/your/spring-boot-project" }
@@ -236,6 +240,7 @@ Every parameter has a sensible default, so you can call it with no arguments at 
 | `projectRoot` | No | current working directory | Root of the Spring Boot project (where `src/main/java` lives). Defaults to the directory the MCP server process was started in. |
 | `outputFile` | No | `report/n1nja-report_{timestamp}.md` | Custom output path for the `.md` report. Each run writes a new timestamped file. |
 | `config` | No | — | Detection thresholds override (see *Detection Thresholds*). |
+| `force` | No | `false` | Skip the project-type check. By default, projects with no JPA/Hibernate (reactive WebFlux/MongoDB services, Python/Node lambdas, …) are skipped with a "not applicable" report. |
 
 ```json
 { "logFile": "logs/application.log", "projectRoot": "/path/to/your/spring-boot-project" }

@@ -6,7 +6,8 @@ import { explainQuery } from './tools/explain-query.tool';
 import { generateN1Report } from './tools/generate-report.tool';
 import { findMissingIndexes } from './tools/find-missing-indexes.tool';
 import { analyzeProjectForNPlusOne } from '../../core/code-analysis/project-analyzer';
-import { setupLogging } from '../../core/setup/logging-configurator';
+import { detectProject, buildNotApplicableMarkdown } from '../../core/code-analysis/project-detector';
+import { setupLogging, undoLogging } from '../../core/setup/logging-configurator';
 import { toMarkdown } from '../../core/reporting/markdown-reporter';
 import { toPdf } from '../../core/reporting/pdf-reporter';
 
@@ -67,6 +68,29 @@ const dbProjectRootSchema = z
       'they are read from its src/main/resources/application.properties|yml ' +
       '(spring.datasource.url/username/password). Defaults to the current working directory.',
   );
+
+const forceSchema = z
+  .boolean()
+  .optional()
+  .describe(
+    'Skip the project-type check and run anyway. By default, projects with no JPA/Hibernate ' +
+      '(reactive WebFlux/MongoDB services, Python/Node lambdas, …) are detected and skipped.',
+  );
+
+/** "Not applicable" result shared by full_scan and autoconfig. */
+function notApplicableResult(
+  projectRoot: string,
+  toolName: string,
+): ToolResult | null {
+  const detection = detectProject(projectRoot);
+  if (detection.applicable) return null;
+  return {
+    content: [
+      json({ skipped: true, reason: 'not-applicable', kind: detection.kind, signals: detection.signals }),
+      text('\n\n---\n\n' + buildNotApplicableMarkdown(detection, toolName)),
+    ],
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -229,7 +253,9 @@ const fullScanTool = defineTool({
     'Use this as your first step — it replaces running analyze_hibernate_log and find_n1_in_code separately. ' +
     'If logFile is omitted, defaults to logs/application.log (Spring Boot recommended config: logging.file.name=logs/application.log). ' +
     'If projectRoot is omitted, defaults to the current working directory. ' +
-    'Each run writes a new timestamped file: report/n1nja-report_{timestamp}.md',
+    'Each run writes a new timestamped file: report/n1nja-report_{timestamp}.md. ' +
+    'If the project does not use JPA/Hibernate (reactive WebFlux/MongoDB service, Python/Node lambda, …) ' +
+    "the scan is skipped with a 'not applicable' report; pass force: true to run anyway.",
   schema: z.object({
     logFile: z.string().optional().describe('Path to the Hibernate log file. Defaults to logs/application.log.'),
     projectRoot: z
@@ -241,8 +267,13 @@ const fullScanTool = defineTool({
       .optional()
       .describe('Custom output path for the .md report. Defaults to report/n1nja-report_{timestamp}.md'),
     config: configSchema,
+    force: forceSchema,
   }),
-  run: async ({ logFile, projectRoot, outputFile, config }) => {
+  run: async ({ logFile, projectRoot = process.cwd(), outputFile, config, force }) => {
+    if (!force) {
+      const skipped = notApplicableResult(projectRoot, 'full_scan');
+      if (skipped) return skipped;
+    }
     const result = await generateN1Report({ logFile, projectRoot, outputFile, config });
     return {
       content: [
@@ -344,6 +375,13 @@ const setupLoggingTool = defineTool({
     'If no config exists at all, it creates src/main/resources/application.properties. ' +
     'It reuses a custom encoder/layout (e.g. a PII-masking layout) when one is found, and is idempotent. ' +
     'Files are written in place. Run this before full_scan. ' +
+    "Use action 'undo' to revert every change autoconfig made (before committing your repo): " +
+    'injected blocks are marker-delimited, so undo removes exactly what was added. ' +
+    'If the project imports Spring Cloud Config (configserver:), the report warns that dev/prod ' +
+    'levels may come from the central config repo and suggests LOGGING_LEVEL_* env vars as a ' +
+    'non-invasive alternative. ' +
+    'If the project does not use JPA/Hibernate (reactive WebFlux/MongoDB service, Python/Node lambda, …) ' +
+    "nothing is configured and a 'not applicable' report is returned; pass force: true to configure anyway. " +
     'If projectRoot is omitted, defaults to the current working directory.',
   schema: z.object({
     projectRoot: z
@@ -353,14 +391,36 @@ const setupLoggingTool = defineTool({
         'Absolute path to the root of the Spring Boot project (where src/main/resources is). ' +
           'Defaults to the current working directory.',
       ),
+    action: z
+      .enum(['apply', 'undo'])
+      .optional()
+      .describe("'apply' (default) configures the logging; 'undo' reverts every N1nja change."),
+    force: forceSchema,
   }),
-  run: ({ projectRoot = process.cwd() }) => {
+  run: ({ projectRoot = process.cwd(), action = 'apply', force }) => {
+    if (action === 'undo') {
+      const result = undoLogging(projectRoot);
+      return {
+        content: [
+          json({
+            action: 'undo',
+            changes: result.changes.map((c) => ({ file: c.file, action: c.action, notes: c.notes })),
+          }),
+          text('\n\n---\n\n' + result.markdownReport),
+        ],
+      };
+    }
+    if (!force) {
+      const skipped = notApplicableResult(projectRoot, 'autoconfig');
+      if (skipped) return skipped;
+    }
     const result = setupLogging(projectRoot);
     return {
       content: [
         json({
           scenario: result.scenario,
           logFile: result.logFile,
+          configServerFiles: result.configServerFiles,
           changes: result.changes.map((c) => ({
             file: c.file,
             action: c.action,

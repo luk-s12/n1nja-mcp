@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { setupLogging } from '../../src/core/setup/logging-configurator';
+import { setupLogging, undoLogging } from '../../src/core/setup/logging-configurator';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -342,5 +342,172 @@ describe('setupLogging — no config', () => {
     expect(result.changes[0].action).toBe('created');
     expect(content).toContain('logging.file.name=logs/application.log');
     expect(content).toContain('logging.level.org.hibernate.SQL=DEBUG');
+  });
+});
+
+// ── Undo ──────────────────────────────────────────────────────────────────────
+
+describe('undoLogging', () => {
+  const LOGBACK = `<configuration>
+    <appender name="consoleAppender" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger : %msg%n</pattern>
+        </encoder>
+    </appender>
+    <root level="info">
+        <appender-ref ref="consoleAppender"/>
+    </root>
+</configuration>
+`;
+
+  it('restores a logback.xml byte-for-byte after apply', () => {
+    writeProjectFile(`${RES}/logback-spring.xml`, LOGBACK);
+
+    setupLogging(tmpDir);
+    expect(read(`${RES}/logback-spring.xml`)).not.toBe(LOGBACK); // sanity: apply changed it
+
+    const result = undoLogging(tmpDir);
+
+    expect(read(`${RES}/logback-spring.xml`)).toBe(LOGBACK);
+    expect(result.changes[0].action).toBe('reverted');
+  });
+
+  it('restores a self-closing <root/> logback exactly', () => {
+    const xml = `<configuration>
+    <appender name="c" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder><pattern>%msg%n</pattern></encoder>
+    </appender>
+    <root level="INFO"/>
+</configuration>
+`;
+    writeProjectFile(`${RES}/logback-spring.xml`, xml);
+
+    setupLogging(tmpDir);
+    undoLogging(tmpDir);
+
+    expect(read(`${RES}/logback-spring.xml`)).toBe(xml);
+  });
+
+  it('restores .properties and .yml files byte-for-byte after apply', () => {
+    const props = 'spring.application.name=demo\n';
+    const yml = 'spring:\n  jpa:\n    show-sql: false\n';
+    writeProjectFile(`${RES}/application.properties`, props);
+    writeProjectFile(`${RES}/application-prod.yml`, yml);
+
+    setupLogging(tmpDir);
+    undoLogging(tmpDir);
+
+    expect(read(`${RES}/application.properties`)).toBe(props);
+    expect(read(`${RES}/application-prod.yml`)).toBe(yml);
+  });
+
+  it('keeps user lines appended AFTER the N1nja block', () => {
+    writeProjectFile(`${RES}/application.properties`, 'spring.application.name=demo\n');
+
+    setupLogging(tmpDir);
+    const withUserLine = read(`${RES}/application.properties`) + 'server.port=9090\n';
+    writeProjectFile(`${RES}/application.properties`, withUserLine);
+
+    undoLogging(tmpDir);
+    const content = read(`${RES}/application.properties`);
+
+    expect(content).toContain('server.port=9090');
+    expect(content).not.toContain('Added by N1nja');
+    expect(content).not.toContain('logging.level.org.hibernate.SQL');
+  });
+
+  it('deletes the application.properties N1nja created from scratch', () => {
+    fs.mkdirSync(path.join(tmpDir, 'src/main/java'), { recursive: true });
+
+    setupLogging(tmpDir); // created-properties scenario
+    const file = path.join(tmpDir, RES, 'application.properties');
+    expect(fs.existsSync(file)).toBe(true);
+
+    const result = undoLogging(tmpDir);
+
+    expect(fs.existsSync(file)).toBe(false);
+    expect(result.changes.some((c) => c.action === 'deleted')).toBe(true);
+  });
+
+  it('keeps a N1nja-created file that gained foreign lines, removing only ours', () => {
+    fs.mkdirSync(path.join(tmpDir, 'src/main/java'), { recursive: true });
+
+    setupLogging(tmpDir);
+    const rel = `${RES}/application.properties`;
+    writeProjectFile(rel, read(rel) + 'spring.application.name=demo\n');
+
+    undoLogging(tmpDir);
+    const content = read(rel);
+
+    expect(content).toContain('spring.application.name=demo');
+    expect(content).not.toContain('Created by N1nja');
+    expect(content).not.toContain('logging.level.org.hibernate');
+  });
+
+  it('is a no-op on a pristine project', () => {
+    writeProjectFile(`${RES}/logback-spring.xml`, LOGBACK);
+    writeProjectFile(`${RES}/application.properties`, 'spring.application.name=demo\n');
+
+    const result = undoLogging(tmpDir);
+
+    expect(result.changes.every((c) => c.action === 'unchanged')).toBe(true);
+    expect(read(`${RES}/logback-spring.xml`)).toBe(LOGBACK);
+  });
+
+  it('apply after undo behaves like a first apply (idempotent cycle)', () => {
+    writeProjectFile(`${RES}/logback-spring.xml`, LOGBACK);
+
+    setupLogging(tmpDir);
+    const firstApply = read(`${RES}/logback-spring.xml`);
+    undoLogging(tmpDir);
+    setupLogging(tmpDir);
+
+    expect(read(`${RES}/logback-spring.xml`)).toBe(firstApply);
+  });
+});
+
+// ── Spring Cloud Config awareness ─────────────────────────────────────────────
+
+describe('setupLogging — config server detection', () => {
+  it('warns and suggests env vars when configserver: is imported', () => {
+    writeProjectFile(`${RES}/application.yml`, 'spring:\n  application:\n    name: ms-demo\n');
+    writeProjectFile(
+      `${RES}/application-prod.yml`,
+      'spring:\n  config:\n    import: "optional:configserver:https://lb-config.example.com/config"\n',
+    );
+
+    const result = setupLogging(tmpDir);
+
+    expect(result.configServerFiles).toHaveLength(1);
+    expect(result.configServerFiles[0]).toContain('application-prod.yml');
+    expect(result.markdownReport).toContain('Spring Cloud Config detected');
+    expect(result.markdownReport).toContain('LOGGING_LEVEL_ORG_HIBERNATE_SQL=DEBUG');
+    expect(result.markdownReport).toContain('LOGGING_LEVEL_ORG_HIBERNATE_ORM_JDBC_BIND=TRACE');
+  });
+
+  it('also warns in the logback scenario (config files are still scanned)', () => {
+    writeProjectFile(
+      `${RES}/logback.xml`,
+      '<configuration><root level="INFO"/></configuration>\n',
+    );
+    writeProjectFile(
+      `${RES}/application.yml`,
+      'spring.config.import: "configserver:https://cfg.internal"\n',
+    );
+
+    const result = setupLogging(tmpDir);
+
+    expect(result.scenario).toBe('logback');
+    expect(result.configServerFiles).toHaveLength(1);
+    expect(result.markdownReport).toContain('Spring Cloud Config detected');
+  });
+
+  it('does not warn without a config server import', () => {
+    writeProjectFile(`${RES}/application.yml`, 'spring:\n  application:\n    name: ms-demo\n');
+
+    const result = setupLogging(tmpDir);
+
+    expect(result.configServerFiles).toHaveLength(0);
+    expect(result.markdownReport).not.toContain('Spring Cloud Config detected');
   });
 });
