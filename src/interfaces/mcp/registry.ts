@@ -6,6 +6,7 @@ import { explainQuery } from './tools/explain-query.tool';
 import { generateN1Report } from './tools/generate-report.tool';
 import { findMissingIndexes } from './tools/find-missing-indexes.tool';
 import { dbTopQueries } from './tools/db-top-queries.tool';
+import { writeMarkdownReport } from './tools/report-path';
 import { analyzeProjectForNPlusOne } from '../../core/code-analysis/project-analyzer';
 import { runStaticScan } from '../../core/static-analysis/static-scanner';
 import { toMarkdown } from '../../core/reporting/markdown-reporter';
@@ -342,7 +343,9 @@ const staticScanTool = defineTool({
     'saveAll() without hibernate.jdbc.batch_size, and read methods missing @Transactional(readOnly = true). ' +
     'Fleet mode: if projectRoot is a folder of microservices (no src/main/java itself, but its ' +
     'subdirectories have one), every project is scanned and ranked worst-first. ' +
-    'Use this as the zero-friction first step; then enable logging and run full_scan on the worst offenders.',
+    'Use this as the zero-friction first step; then enable logging and run full_scan on the worst offenders. ' +
+    'Each run also writes the markdown report to disk: report/n1nja-static-scan_{timestamp}.md ' +
+    '(override the path with outputFile).',
   schema: z.object({
     projectRoot: z
       .string()
@@ -355,12 +358,18 @@ const staticScanTool = defineTool({
       .number()
       .optional()
       .describe('Cap of findings reported per project, most severe first. Default: 50.'),
+    outputFile: z
+      .string()
+      .optional()
+      .describe('Custom output path for the .md report. Defaults to report/n1nja-static-scan_{timestamp}.md'),
   }),
-  run: ({ projectRoot = process.cwd(), maxFindingsPerProject }) => {
+  run: ({ projectRoot = process.cwd(), maxFindingsPerProject, outputFile }) => {
     const result = runStaticScan(projectRoot, { maxFindingsPerProject });
+    const reportPath = writeMarkdownReport('n1nja-static-scan', result.markdownReport, outputFile);
     return {
       content: [
         json({
+          reportPath,
           mode: result.mode,
           scannedRoot: result.scannedRoot,
           projects: result.projects.map((p) => ({
@@ -377,7 +386,7 @@ const staticScanTool = defineTool({
             })),
           })),
         }),
-        text('\n\n---\n\n' + result.markdownReport),
+        text(`\n\n✅ Report saved to: ${reportPath}\n\n---\n\n` + result.markdownReport),
       ],
     };
   },

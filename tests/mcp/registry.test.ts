@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { z } from 'zod';
 import { tools } from '../../src/interfaces/mcp/registry';
 
@@ -22,6 +25,8 @@ describe('mcp tool registry', () => {
     expect(tool.schema.safeParse({}).success).toBe(true);
     expect(tool.schema.safeParse({ projectRoot: 'C:/x', maxFindingsPerProject: 10 }).success).toBe(true);
     expect(tool.schema.safeParse({ maxFindingsPerProject: 'many' }).success).toBe(false);
+    expect(tool.schema.safeParse({ outputFile: 'report/static.md' }).success).toBe(true);
+    expect(tool.schema.safeParse({ outputFile: 42 }).success).toBe(false);
   });
 
   it('db_top_queries validates the orderBy enum and allows empty input', () => {
@@ -61,5 +66,55 @@ describe('mcp tool registry', () => {
     const tool = tools.find((t) => t.name === 'full_scan')!;
     expect(tool.schema.safeParse({ config: { slowQueryMs: 200 } }).success).toBe(true);
     expect(tool.schema.safeParse({ config: { slowQueryMs: 'fast' } }).success).toBe(false);
+  });
+});
+
+// ── static_scan report file ──────────────────────────────────────────────────
+
+describe('static_scan — .md report on disk', () => {
+  let tmpDir: string;
+
+  function write(relativePath: string, content: string): void {
+    const filePath = path.join(tmpDir, relativePath);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf8');
+  }
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'n1nja-staticscan-report-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('writes the markdown report to the given outputFile and returns its path', async () => {
+    write(
+      'src/main/java/com/demo/Order.java',
+      `package com.demo;
+
+import javax.persistence.Entity;
+import javax.persistence.OneToMany;
+import javax.persistence.FetchType;
+import java.util.List;
+
+@Entity
+public class Order {
+    @OneToMany(fetch = FetchType.EAGER)
+    private List<Item> items;
+}
+`,
+    );
+    const outputFile = path.join(tmpDir, 'out', 'static-report.md');
+    const tool = tools.find((t) => t.name === 'static_scan')!;
+
+    const result = await tool.run({ projectRoot: tmpDir, outputFile });
+
+    const payload = JSON.parse(result.content[0].text);
+    expect(payload.reportPath).toBe(outputFile);
+    expect(fs.existsSync(outputFile)).toBe(true);
+    const md = fs.readFileSync(outputFile, 'utf8');
+    expect(md).toContain('EAGER');
+    expect(result.content[1].text).toContain(`Report saved to: ${outputFile}`);
   });
 });
