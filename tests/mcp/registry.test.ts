@@ -6,13 +6,29 @@ describe('mcp tool registry', () => {
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
       'analyze_hibernate_log',
+      'db_top_queries',
       'explain_sql',
       'find_missing_indexes',
       'find_n1_in_code',
       'full_scan',
       'monitor_log',
       'show_report',
+      'static_scan',
     ]);
+  });
+
+  it('static_scan allows empty input and validates maxFindingsPerProject', () => {
+    const tool = tools.find((t) => t.name === 'static_scan')!;
+    expect(tool.schema.safeParse({}).success).toBe(true);
+    expect(tool.schema.safeParse({ projectRoot: 'C:/x', maxFindingsPerProject: 10 }).success).toBe(true);
+    expect(tool.schema.safeParse({ maxFindingsPerProject: 'many' }).success).toBe(false);
+  });
+
+  it('db_top_queries validates the orderBy enum and allows empty input', () => {
+    const tool = tools.find((t) => t.name === 'db_top_queries')!;
+    expect(tool.schema.safeParse({}).success).toBe(true);
+    expect(tool.schema.safeParse({ orderBy: 'total_time', limit: 5, reset: false }).success).toBe(true);
+    expect(tool.schema.safeParse({ orderBy: 'slowest' }).success).toBe(false);
   });
 
   it('registers explain_sql (regression: it was missing from the old dispatcher)', () => {

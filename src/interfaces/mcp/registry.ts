@@ -5,6 +5,7 @@ import { watchHibernateLog } from './tools/watch-log.tool';
 import { explainQuery } from './tools/explain-query.tool';
 import { generateN1Report } from './tools/generate-report.tool';
 import { findMissingIndexes } from './tools/find-missing-indexes.tool';
+import { dbTopQueries } from './tools/db-top-queries.tool';
 import { analyzeProjectForNPlusOne } from '../../core/code-analysis/project-analyzer';
 import { runStaticScan } from '../../core/static-analysis/static-scanner';
 import { toMarkdown } from '../../core/reporting/markdown-reporter';
@@ -382,6 +383,51 @@ const staticScanTool = defineTool({
   },
 });
 
+const dbTopQueriesTool = defineTool({
+  name: 'db_top_queries',
+  description:
+    "Reads the database's own statement statistics (MySQL performance_schema digest summary, " +
+    'or PostgreSQL pg_stat_statements) and returns the most expensive queries with REAL ' +
+    'server-side timing: total/avg time, rows examined vs sent, and full-scan counts. ' +
+    'Needs NO application logging — use it when Hibernate SQL logging is off or as ground truth ' +
+    'to complement the log analysis. ' +
+    "Use reset: true to zero the counters, exercise a specific flow, then call again to measure only that flow. " +
+    'DB credentials are resolved from: the envFile parameter, the DB_* environment variables ' +
+    '(or a .env in the working directory), or the Spring project application.properties/yml ' +
+    '(spring.datasource.*) under projectRoot.',
+  schema: z.object({
+    envFile: envFileSchema,
+    projectRoot: dbProjectRootSchema,
+    limit: z.number().optional().describe('How many queries to return. Default: 20.'),
+    orderBy: z
+      .enum(['total_time', 'avg_time', 'calls', 'rows_examined'])
+      .optional()
+      .describe("Ranking metric. Default: 'total_time'."),
+    minCalls: z.number().optional().describe('Ignore statements executed fewer times than this. Default: 1.'),
+    reset: z
+      .boolean()
+      .optional()
+      .describe('Reset the server-side statistics instead of reading them (measure a specific flow).'),
+  }),
+  run: async ({ envFile, projectRoot, limit, orderBy, minCalls, reset }) => {
+    const result = await dbTopQueries({ envFile, projectRoot, limit, orderBy, minCalls, reset });
+    return {
+      content: [
+        json({
+          dbType: result.dbType,
+          dbHost: result.dbHost,
+          dbName: result.dbName,
+          orderBy: result.orderBy,
+          statsReset: result.statsReset ?? false,
+          queriesReturned: result.queries.length,
+          queries: result.queries,
+        }),
+        text('\n\n---\n\n' + result.markdownReport),
+      ],
+    };
+  },
+});
+
 export const tools: ToolDef[] = [
   analyzeHibernateLogTool,
   monitorLogTool,
@@ -391,4 +437,5 @@ export const tools: ToolDef[] = [
   explainSqlTool,
   findMissingIndexesTool,
   staticScanTool,
+  dbTopQueriesTool,
 ];
