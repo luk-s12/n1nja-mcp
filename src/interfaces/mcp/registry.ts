@@ -6,6 +6,7 @@ import { explainQuery } from './tools/explain-query.tool';
 import { generateN1Report } from './tools/generate-report.tool';
 import { findMissingIndexes } from './tools/find-missing-indexes.tool';
 import { analyzeProjectForNPlusOne } from '../../core/code-analysis/project-analyzer';
+import { runStaticScan } from '../../core/static-analysis/static-scanner';
 import { toMarkdown } from '../../core/reporting/markdown-reporter';
 import { toPdf } from '../../core/reporting/pdf-reporter';
 
@@ -331,6 +332,56 @@ const findMissingIndexesTool = defineTool({
   },
 });
 
+const staticScanTool = defineTool({
+  name: 'static_scan',
+  description:
+    'Audits a Spring Boot / JPA project WITHOUT needing logs or a running app: ' +
+    'scans the Java sources and config for anti-patterns that cause N+1 queries and slow writes — ' +
+    'EAGER collections, @ManyToMany, multiple JOIN FETCH in one query, unbounded findAll(), ' +
+    'saveAll() without hibernate.jdbc.batch_size, and read methods missing @Transactional(readOnly = true). ' +
+    'Fleet mode: if projectRoot is a folder of microservices (no src/main/java itself, but its ' +
+    'subdirectories have one), every project is scanned and ranked worst-first. ' +
+    'Use this as the zero-friction first step; then enable logging and run full_scan on the worst offenders.',
+  schema: z.object({
+    projectRoot: z
+      .string()
+      .optional()
+      .describe(
+        'A Spring Boot project root (where src/main/java is), or a folder containing several ' +
+          'such projects (fleet mode). Defaults to the current working directory.',
+      ),
+    maxFindingsPerProject: z
+      .number()
+      .optional()
+      .describe('Cap of findings reported per project, most severe first. Default: 50.'),
+  }),
+  run: ({ projectRoot = process.cwd(), maxFindingsPerProject }) => {
+    const result = runStaticScan(projectRoot, { maxFindingsPerProject });
+    return {
+      content: [
+        json({
+          mode: result.mode,
+          scannedRoot: result.scannedRoot,
+          projects: result.projects.map((p) => ({
+            project: p.projectName,
+            score: p.score,
+            entitiesScanned: p.entitiesScanned,
+            javaFilesScanned: p.javaFilesScanned,
+            countsByType: p.countsByType,
+            findings: p.findings.map((f) => ({
+              type: f.type,
+              severity: f.severity,
+              location: `${f.file}:${f.line}`,
+              detail: f.detail,
+            })),
+          })),
+        }),
+        text('\n\n---\n\n' + result.markdownReport),
+      ],
+    };
+  },
+});
+
 export const tools: ToolDef[] = [
   analyzeHibernateLogTool,
   monitorLogTool,
@@ -339,4 +390,5 @@ export const tools: ToolDef[] = [
   fullScanTool,
   explainSqlTool,
   findMissingIndexesTool,
+  staticScanTool,
 ];

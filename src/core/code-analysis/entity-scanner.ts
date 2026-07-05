@@ -8,6 +8,8 @@ export interface EntityAssociation {
   fetchType?: 'LAZY' | 'EAGER';
   mappedBy?: string;
   isBag: boolean; // List without @OrderColumn is a Hibernate "bag"
+  /** 1-based line of the association annotation in the entity file. */
+  lineNumber: number;
 }
 
 export interface ScannedEntity {
@@ -109,7 +111,7 @@ function parseEntityFile(filePath: string, content: string): ScannedEntity | nul
       ? (genericMatch[1] ?? genericMatch[2] ?? genericMatch[3] ?? 'Unknown')
       : (simpleTypeMatch ? simpleTypeMatch[1] : 'Unknown');
 
-    associations.push({ fieldName, targetEntity, annotationType, fetchType, mappedBy, isBag });
+    associations.push({ fieldName, targetEntity, annotationType, fetchType, mappedBy, isBag, lineNumber: i + 1 });
   }
 
   return { className, tableName, filePath, associations, hasBatchSize, batchSizeValue };
