@@ -1,6 +1,6 @@
-import * as fs from 'fs';
 import * as path from 'path';
 import { analyzeHibernateLog } from './analyze-log.tool';
+import { writeMarkdownReport } from './report-path';
 import { analyzeProjectForNPlusOne } from '../../../core/code-analysis/project-analyzer';
 import { buildCombinedReport } from '../../../core/reporting/combined-report';
 import { DetectorConfig } from '../../../domain/models/config.model';
@@ -27,18 +27,6 @@ export interface GenerateReportOutput {
 
 const DEFAULT_LOG_FILE = 'logs/application.log';
 
-function buildTimestampedOutputPath(outputFile?: string): string {
-  if (outputFile) return path.resolve(outputFile);
-  const ts = new Date()
-    .toISOString()
-    .replace(/[:.]/g, '-')
-    .replace('T', '_')
-    .slice(0, 19); // e.g. 2026-06-20_14-35-00
-  const dir = path.resolve('report');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, `n1nja-report_${ts}.md`);
-}
-
 export async function generateN1Report(input: GenerateReportInput): Promise<GenerateReportOutput> {
   const {
     logFile = DEFAULT_LOG_FILE,
@@ -64,8 +52,7 @@ export async function generateN1Report(input: GenerateReportInput): Promise<Gene
   const markdown = buildCombinedReport(logFile, logResult.jsonReport, projectResult);
 
   // ── Step 4: write to disk ────────────────────────────────────────────────
-  const outputPath = buildTimestampedOutputPath(outputFile);
-  fs.writeFileSync(outputPath, markdown, 'utf8');
+  const outputPath = writeMarkdownReport('n1nja-report', markdown, outputFile);
   process.stderr.write(`✅ Report saved to: ${outputPath}\n`);
 
   return {

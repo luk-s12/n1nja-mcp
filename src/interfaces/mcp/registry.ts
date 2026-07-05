@@ -5,9 +5,12 @@ import { watchHibernateLog } from './tools/watch-log.tool';
 import { explainQuery } from './tools/explain-query.tool';
 import { generateN1Report } from './tools/generate-report.tool';
 import { findMissingIndexes } from './tools/find-missing-indexes.tool';
+import { dbTopQueries } from './tools/db-top-queries.tool';
+import { writeMarkdownReport } from './tools/report-path';
 import { analyzeProjectForNPlusOne } from '../../core/code-analysis/project-analyzer';
 import { detectProject, buildNotApplicableMarkdown } from '../../core/code-analysis/project-detector';
 import { setupLogging, undoLogging } from '../../core/setup/logging-configurator';
+import { runStaticScan } from '../../core/static-analysis/static-scanner';
 import { toMarkdown } from '../../core/reporting/markdown-reporter';
 import { toPdf } from '../../core/reporting/pdf-reporter';
 
@@ -433,6 +436,109 @@ const setupLoggingTool = defineTool({
   },
 });
 
+const staticScanTool = defineTool({
+  name: 'static_scan',
+  description:
+    'Audits a Spring Boot / JPA project WITHOUT needing logs or a running app: ' +
+    'scans the Java sources and config for anti-patterns that cause N+1 queries and slow writes — ' +
+    'EAGER collections, @ManyToMany, multiple JOIN FETCH in one query, unbounded findAll(), ' +
+    'saveAll() without hibernate.jdbc.batch_size, and read methods missing @Transactional(readOnly = true). ' +
+    'Fleet mode: if projectRoot is a folder of microservices (no src/main/java itself, but its ' +
+    'subdirectories have one), every project is scanned and ranked worst-first. ' +
+    'Use this as the zero-friction first step; then enable logging and run full_scan on the worst offenders. ' +
+    'Each run also writes the markdown report to disk: report/n1nja-static-scan_{timestamp}.md ' +
+    '(override the path with outputFile).',
+  schema: z.object({
+    projectRoot: z
+      .string()
+      .optional()
+      .describe(
+        'A Spring Boot project root (where src/main/java is), or a folder containing several ' +
+          'such projects (fleet mode). Defaults to the current working directory.',
+      ),
+    maxFindingsPerProject: z
+      .number()
+      .optional()
+      .describe('Cap of findings reported per project, most severe first. Default: 50.'),
+    outputFile: z
+      .string()
+      .optional()
+      .describe('Custom output path for the .md report. Defaults to report/n1nja-static-scan_{timestamp}.md'),
+  }),
+  run: ({ projectRoot = process.cwd(), maxFindingsPerProject, outputFile }) => {
+    const result = runStaticScan(projectRoot, { maxFindingsPerProject });
+    const reportPath = writeMarkdownReport('n1nja-static-scan', result.markdownReport, outputFile);
+    return {
+      content: [
+        json({
+          reportPath,
+          mode: result.mode,
+          scannedRoot: result.scannedRoot,
+          projects: result.projects.map((p) => ({
+            project: p.projectName,
+            score: p.score,
+            entitiesScanned: p.entitiesScanned,
+            javaFilesScanned: p.javaFilesScanned,
+            countsByType: p.countsByType,
+            findings: p.findings.map((f) => ({
+              type: f.type,
+              severity: f.severity,
+              location: `${f.file}:${f.line}`,
+              detail: f.detail,
+            })),
+          })),
+        }),
+        text(`\n\n✅ Report saved to: ${reportPath}\n\n---\n\n` + result.markdownReport),
+      ],
+    };
+  },
+});
+
+const dbTopQueriesTool = defineTool({
+  name: 'db_top_queries',
+  description:
+    "Reads the database's own statement statistics (MySQL performance_schema digest summary, " +
+    'or PostgreSQL pg_stat_statements) and returns the most expensive queries with REAL ' +
+    'server-side timing: total/avg time, rows examined vs sent, and full-scan counts. ' +
+    'Needs NO application logging — use it when Hibernate SQL logging is off or as ground truth ' +
+    'to complement the log analysis. ' +
+    "Use reset: true to zero the counters, exercise a specific flow, then call again to measure only that flow. " +
+    'DB credentials are resolved from: the envFile parameter, the DB_* environment variables ' +
+    '(or a .env in the working directory), or the Spring project application.properties/yml ' +
+    '(spring.datasource.*) under projectRoot.',
+  schema: z.object({
+    envFile: envFileSchema,
+    projectRoot: dbProjectRootSchema,
+    limit: z.number().optional().describe('How many queries to return. Default: 20.'),
+    orderBy: z
+      .enum(['total_time', 'avg_time', 'calls', 'rows_examined'])
+      .optional()
+      .describe("Ranking metric. Default: 'total_time'."),
+    minCalls: z.number().optional().describe('Ignore statements executed fewer times than this. Default: 1.'),
+    reset: z
+      .boolean()
+      .optional()
+      .describe('Reset the server-side statistics instead of reading them (measure a specific flow).'),
+  }),
+  run: async ({ envFile, projectRoot, limit, orderBy, minCalls, reset }) => {
+    const result = await dbTopQueries({ envFile, projectRoot, limit, orderBy, minCalls, reset });
+    return {
+      content: [
+        json({
+          dbType: result.dbType,
+          dbHost: result.dbHost,
+          dbName: result.dbName,
+          orderBy: result.orderBy,
+          statsReset: result.statsReset ?? false,
+          queriesReturned: result.queries.length,
+          queries: result.queries,
+        }),
+        text('\n\n---\n\n' + result.markdownReport),
+      ],
+    };
+  },
+});
+
 export const tools: ToolDef[] = [
   analyzeHibernateLogTool,
   monitorLogTool,
@@ -442,4 +548,6 @@ export const tools: ToolDef[] = [
   explainSqlTool,
   findMissingIndexesTool,
   setupLoggingTool,
+  staticScanTool,
+  dbTopQueriesTool,
 ];
