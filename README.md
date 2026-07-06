@@ -195,6 +195,8 @@ With logging enabled, restart your MCP client and you're ready to go:
 |---------|------|-------------------------------|-------------|
 | `autoconfig` | Setup | `projectRoot` (def. cwd) | Auto-configures the logging N1nja needs. Detects a custom Logback config and edits the XML, or adds the properties to `application.properties`/`yml`. **Run this once, before `full_scan`.** |
 | `full_scan` | ⭐ All-in-one | `logFile` (def. `logs/application.log`), `projectRoot` (def. cwd), `outputFile`, `config` | Parses log + scans source code + writes `.md` report with ready-to-copy fixes. **Start here.** |
+| `static_scan` | Static audit | `projectRoot` (def. cwd), `maxFindingsPerProject` (def. 50), `outputFile` | Audits the source code for JPA anti-patterns **without logs or a running app**. Fleet mode: point it at a folder of microservices to scan and rank them all. Writes a `.md` report. |
+| `db_top_queries` | Database | `envFile`, `projectRoot`, `limit` (def. 20), `orderBy` (def. `total_time`), `minCalls`, `reset` | Returns the most expensive queries with **real server-side stats** (MySQL `performance_schema` / PostgreSQL `pg_stat_statements`). Needs no application logging. |
 | `analyze_hibernate_log` | Log | `logFile` (def. `logs/application.log`), `config` | Detects N+1, duplicate queries, large result sets, slow queries, cartesian products, SELECT * over-fetching, and deadlocks. |
 | `find_n1_in_code` | Analysis | `projectRoot` (def. cwd) | Scans Java source and pinpoints the exact entity, field, and method causing each issue. |
 | `find_missing_indexes` | Database | `envFile`, `projectRoot` | Connects to DB, cross-references WHERE/JOIN/ORDER BY columns against existing indexes, generates `CREATE INDEX` statements. |
@@ -244,6 +246,47 @@ Every parameter has a sensible default, so you can call it with no arguments at 
 
 ```json
 { "logFile": "logs/application.log", "projectRoot": "/path/to/your/spring-boot-project" }
+```
+
+---
+
+### `static_scan`
+
+Audits the project **without logs or a running app**: scans the Java sources and config for the anti-patterns that cause N+1 queries and slow writes — EAGER collections, `@ManyToMany`, multiple `JOIN FETCH` in one query, unbounded `findAll()`, `saveAll()` without `hibernate.jdbc.batch_size`, and read methods missing `@Transactional(readOnly = true)`. Every finding includes the file, line, offending code and a fix recommendation. Use it as the zero-friction first step; then enable logging and run `full_scan` on the worst offenders.
+
+**Fleet mode:** if `projectRoot` is not itself a Java project but its subdirectories are (a folder full of microservices), every project is scanned and ranked worst-first by a severity-weighted score.
+
+Each run also writes the report to disk: `report/n1nja-static-scan_{timestamp}.md`.
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `projectRoot` | No | current working directory | A Spring Boot project root (where `src/main/java` lives), or a folder containing several such projects (fleet mode). |
+| `maxFindingsPerProject` | No | `50` | Cap of findings reported per project, most severe first. |
+| `outputFile` | No | `report/n1nja-static-scan_{timestamp}.md` | Custom output path for the `.md` report. |
+
+```json
+{ "projectRoot": "/path/to/your/microservices-folder" }
+```
+
+---
+
+### `db_top_queries`
+
+Reads the database's own statement statistics (MySQL `performance_schema` digest summary, or PostgreSQL `pg_stat_statements`) and returns the most expensive queries with **real server-side timing**: total/avg time, rows examined vs sent, and full-scan counts. It needs no application logging — use it when Hibernate SQL logging is off, or as ground truth to complement the log analysis.
+
+Use `reset: true` to zero the counters, exercise a specific flow, then call again to measure only that flow. Credentials are resolved like the other DB tools (see [Database credentials](#database-credentials)).
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `envFile` | No | — | Path to a `.env` file with the `DB_*` credentials. |
+| `projectRoot` | No | current working directory | Spring project to read `spring.datasource.*` from when env credentials are missing. |
+| `limit` | No | `20` | How many queries to return. |
+| `orderBy` | No | `total_time` | Ranking metric: `total_time`, `avg_time`, `calls`, `rows_examined`. |
+| `minCalls` | No | `1` | Ignore statements executed fewer times than this. |
+| `reset` | No | `false` | Reset the server-side statistics instead of reading them. |
+
+```json
+{ "orderBy": "avg_time", "limit": 10 }
 ```
 
 ---

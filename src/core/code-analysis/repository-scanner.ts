@@ -254,7 +254,7 @@ function readStringLiteral(s: string, start: number): { value: string; end: numb
 const COLLECTION_SIGNATURE = /\b(?:List|Set|Collection|Page|Slice|Optional|Iterable)<[^>]+>\s+\w+\s*\(/i;
 
 /** Declaration-looking line: modifiers? + return type + name + `(`. */
-const GENERIC_SIGNATURE = /^(?:(?:public|protected|private|default|static|final|abstract|synchronized)\s+)*[\w$][\w$.<>,\[\]\s?]*\s+\w+\s*\(/;
+const GENERIC_SIGNATURE = /^(?:(?:public|protected|private|default|static|final|abstract|synchronized)\s+)*[\w$][\w$.<>,[\]\s?]*\s+\w+\s*\(/;
 
 function isMethodSignature(text: string): boolean {
   const trimmed = text.trim();
