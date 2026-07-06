@@ -44,6 +44,19 @@ const LOGBACK_FILE_NAMES = ['logback-spring.xml', 'logback.xml'];
 /** Matches application.properties/yml and profile variants (application-ci.yml). */
 const APP_CONFIG_FILE = /^application(?:-([\w.-]+))?\.(properties|ya?ml)$/i;
 
+/**
+ * Markers wrapping every block injected into a Logback XML, so `undo` can
+ * remove exactly what was added and nothing else.
+ */
+const MARK_BEGIN = '<!-- n1nja:begin -->';
+const MARK_END = '<!-- n1nja:end -->';
+
+/** Header of the block appended to application.properties/yml. */
+const PROPS_BLOCK_HEADER = '# Added by N1nja — Hibernate SQL logging';
+
+/** Header of a fully N1nja-created application.properties. */
+const CREATED_HEADER = '# Created by N1nja — Hibernate SQL logging';
+
 // ── Result types ────────────────────────────────────────────────────────────
 
 export type Scenario = 'logback' | 'properties' | 'created-properties';
@@ -52,7 +65,7 @@ export interface FileChange {
   /** Absolute path of the file written. */
   file: string;
   /** What happened to it. */
-  action: 'updated' | 'created' | 'unchanged';
+  action: 'updated' | 'created' | 'unchanged' | 'reverted' | 'deleted';
   /** Human-readable notes about what was added (or why nothing was). */
   notes: string[];
 }
@@ -61,6 +74,18 @@ export interface SetupLoggingResult {
   projectRoot: string;
   scenario: Scenario;
   logFile: string;
+  changes: FileChange[];
+  /**
+   * Config files importing Spring Cloud Config (`configserver:`). When
+   * non-empty, effective dev/prod logging levels may come from the central
+   * config repo instead of the files edited here.
+   */
+  configServerFiles: string[];
+  markdownReport: string;
+}
+
+export interface UndoLoggingResult {
+  projectRoot: string;
   changes: FileChange[];
   markdownReport: string;
 }
@@ -98,8 +123,24 @@ export function setupLogging(projectRoot: string): SetupLoggingResult {
     scenario,
     logFile: DEFAULT_LOG_FILE,
     changes,
+    configServerFiles: detectConfigServerFiles(projectRoot),
   };
   return { ...result, markdownReport: buildMarkdown(result) };
+}
+
+/**
+ * Reverts everything setupLogging added: the marker-delimited blocks in
+ * Logback XMLs, the "# Added by N1nja" blocks in application.properties/yml,
+ * and the application.properties created from scratch (deleted only if no
+ * foreign lines were added to it since).
+ */
+export function undoLogging(projectRoot: string): UndoLoggingResult {
+  const changes: FileChange[] = [
+    ...findLogbackFiles(projectRoot).map(revertLogbackFile),
+    ...findAppConfigFiles(projectRoot).map(revertAppConfigFile),
+  ];
+  const result: Omit<UndoLoggingResult, 'markdownReport'> = { projectRoot, changes };
+  return { ...result, markdownReport: buildUndoMarkdown(result) };
 }
 
 // ── Detection ─────────────────────────────────────────────────────────────────
@@ -171,7 +212,8 @@ export function configureLogbackFile(file: string): FileChange {
     loggerLines.push(`    <logger name="${name}" level="${level}"/>`);
   }
   if (loggerLines.length > 0) {
-    xml = insertBeforeClosingConfiguration(xml, loggerLines.join('\n') + '\n');
+    const block = ['', `    ${MARK_BEGIN}`, ...loggerLines, `    ${MARK_END}`, ''].join('\n');
+    xml = insertBeforeClosingConfiguration(xml, block);
     notes.push(`Added Hibernate logger(s): ${loggerLines.length} of ${HIBERNATE_LOGGERS.length}.`);
   } else {
     notes.push('All Hibernate loggers already present — left as is.');
@@ -349,6 +391,7 @@ function buildFileAppenderXml(name: string, custom: CustomEncoder | null): strin
   const encoderOpen = custom?.encoderClass ? `<encoder class="${custom.encoderClass}">` : '<encoder>';
   return [
     '',
+    `    ${MARK_BEGIN}`,
     '    <!-- Added by N1nja: writes the file the MCP reads -->',
     `    <appender name="${name}" class="ch.qos.logback.core.FileAppender">`,
     `        <file>${DEFAULT_LOG_FILE}</file>`,
@@ -356,6 +399,7 @@ function buildFileAppenderXml(name: string, custom: CustomEncoder | null): strin
     `            ${inner}`,
     '        </encoder>',
     '    </appender>',
+    `    ${MARK_END}`,
     '',
   ].join('\n');
 }
@@ -492,7 +536,110 @@ function createApplicationProperties(projectRoot: string): FileChange {
   };
 }
 
+// ── Undo ────────────────────────────────────────────────────────────────────
+
+/** Removes the marker-delimited N1nja blocks and the root appender-ref. */
+function revertLogbackFile(file: string): FileChange {
+  const original = fs.readFileSync(file, 'utf8');
+  let xml = original;
+  const notes: string[] = [];
+
+  // Marker-delimited blocks (file appender + loggers). The first regex also
+  // consumes the blank line each insertion left before </configuration>, so a
+  // clean apply → undo round-trip restores the file byte-for-byte; the second
+  // is a lenient fallback for blocks whose surroundings were hand-edited.
+  const exactBlock = new RegExp(`\\n[ \\t]*${MARK_BEGIN}\\n[\\s\\S]*?${MARK_END}\\n\\n`, 'g');
+  const anyBlock = new RegExp(`\\n?[ \\t]*${MARK_BEGIN}[\\s\\S]*?${MARK_END}[ \\t]*\\n?`, 'g');
+  const blockCount = (xml.match(anyBlock) ?? []).length;
+  xml = xml.replace(exactBlock, '').replace(anyBlock, '');
+  if (xml !== original) notes.push(`Removed ${blockCount} N1nja block(s).`);
+
+  // The <root> appender-ref. If wiring it had expanded a self-closing
+  // <root .../>, collapse the now-empty element back.
+  const refLine = /[ \t]*<appender-ref ref="n1njaFileAppender"\/>[ \t]*\n/g;
+  const refWasAlone = /<root\b[^>]*>\s*<appender-ref ref="n1njaFileAppender"\/>\s*<\/root>/.test(xml);
+  const beforeRef = xml;
+  xml = xml.replace(refLine, '');
+  if (xml !== beforeRef) {
+    if (refWasAlone) xml = xml.replace(/(<root\b[^>]*)>\s*<\/root>/, '$1/>');
+    notes.push('Removed the <root> appender-ref.');
+  }
+
+  if (xml === original) {
+    return { file, action: 'unchanged', notes: ['No N1nja changes found.'] };
+  }
+  fs.writeFileSync(file, xml, 'utf8');
+  return { file, action: 'reverted', notes };
+}
+
+/** Lines the properties/yml writers add (plain and quoted-YAML forms). */
+const N1NJA_PROPERTY_LINE = /^\s*"?logging\.(?:file\.name|level\.org\.hibernate)/;
+
+/** Removes the appended N1nja block; deletes a file N1nja created outright. */
+function revertAppConfigFile(file: string): FileChange {
+  const original = fs.readFileSync(file, 'utf8');
+
+  // A file created from scratch by N1nja: delete it — unless foreign lines
+  // were added since, in which case only the N1nja lines are removed.
+  if (original.startsWith(CREATED_HEADER)) {
+    const lines = original.split('\n');
+    const isOurs = (l: string): boolean => l.trim() === CREATED_HEADER || N1NJA_PROPERTY_LINE.test(l);
+    const foreign = lines.filter((l) => l.trim() && !isOurs(l));
+    if (foreign.length === 0) {
+      fs.unlinkSync(file);
+      return { file, action: 'deleted', notes: ['File was created by N1nja — deleted.'] };
+    }
+    fs.writeFileSync(file, lines.filter((l) => !isOurs(l)).join('\n'), 'utf8');
+    return {
+      file,
+      action: 'reverted',
+      notes: ['File was created by N1nja but edited since — removed only the N1nja lines.'],
+    };
+  }
+
+  // A pre-existing file we appended a block to. Only lines matching the keys
+  // N1nja writes are consumed, so user lines appended below stay untouched.
+  const blockRe = new RegExp(
+    `\\n${escapeRegExp(PROPS_BLOCK_HEADER)}\\n(?:\\s*"?logging\\.[^\\n]*\\n)*\\n?`,
+    'g',
+  );
+  const reverted = original.replace(blockRe, '');
+  if (reverted === original) {
+    return { file, action: 'unchanged', notes: ['No N1nja block found.'] };
+  }
+  fs.writeFileSync(file, reverted, 'utf8');
+  return { file, action: 'reverted', notes: ['Removed the N1nja logging block.'] };
+}
+
+// ── Spring Cloud Config detection ───────────────────────────────────────────
+
+const CONFIG_SERVER_IMPORT = /configserver:|spring[.\s_-]*cloud[.\s_-]*config/i;
+
+/** Config files importing a Spring Cloud Config server. */
+export function detectConfigServerFiles(projectRoot: string): string[] {
+  const hits: string[] = [];
+  for (const file of findAppConfigFiles(projectRoot)) {
+    try {
+      if (CONFIG_SERVER_IMPORT.test(fs.readFileSync(file, 'utf8'))) hits.push(file);
+    } catch {
+      /* unreadable — skip */
+    }
+  }
+  return hits;
+}
+
+/** Env-var alternative to file edits (Spring relaxed binding). */
+function loggingEnvVars(): string[] {
+  return HIBERNATE_LOGGERS.map(
+    ({ name, level }) => `LOGGING_LEVEL_${name.replace(/\./g, '_').toUpperCase()}=${level}`,
+  );
+}
+
 // ── Small helpers ─────────────────────────────────────────────────────────────
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 function fileExists(p: string): boolean {
   try {
@@ -560,6 +707,31 @@ function buildMarkdown(r: Omit<SetupLoggingResult, 'markdownReport'>): string {
   lines.push(`> **Log file:** \`${r.logFile}\``);
   lines.push('');
 
+  if (r.configServerFiles.length > 0) {
+    lines.push('## ⚠️ Spring Cloud Config detected');
+    lines.push('');
+    for (const f of r.configServerFiles) lines.push(`- \`${f}\``);
+    lines.push('');
+    lines.push(
+      'These files import a config server (`configserver:`). In environments where it is active ' +
+        '(typically dev/prod), the EFFECTIVE logging levels may come from the central config repo ' +
+        'and override the changes above. The edits here are guaranteed to apply when the app runs ' +
+        'without the config server (e.g. locally).',
+    );
+    lines.push('');
+    lines.push('Non-invasive alternative — set env vars on the app process instead of editing files:');
+    lines.push('');
+    lines.push('```');
+    for (const v of loggingEnvVars()) lines.push(v);
+    lines.push('```');
+    lines.push('');
+    lines.push(
+      '> Level env vars take effect even with a custom logback.xml (Spring applies logging.level.* ' +
+        'after Logback starts), but the log FILE destination still requires the file appender in the XML.',
+    );
+    lines.push('');
+  }
+
   const changed = r.changes.filter((c) => c.action !== 'unchanged');
   lines.push(`## Files (${changed.length} changed, ${r.changes.length} inspected)`);
   lines.push('');
@@ -575,6 +747,33 @@ function buildMarkdown(r: Omit<SetupLoggingResult, 'markdownReport'>): string {
   lines.push('1. Restart your Spring Boot app so the new logging config takes effect.');
   lines.push('2. Exercise the endpoints/flows that trigger the queries (the log must contain real queries).');
   lines.push('3. Run `full_scan` to analyze the captured log.');
+  lines.push('4. When done, run `autoconfig` with `action: "undo"` to revert these edits before committing.');
+
+  return lines.join('\n');
+}
+
+function buildUndoMarkdown(r: Omit<UndoLoggingResult, 'markdownReport'>): string {
+  const lines: string[] = [];
+  lines.push('# 🥷 N1nja — Logging Setup Undo');
+  lines.push('');
+  lines.push(`> **Project:** \`${r.projectRoot}\``);
+  lines.push('');
+
+  const touched = r.changes.filter((c) => c.action !== 'unchanged');
+  lines.push(`## Files (${touched.length} reverted, ${r.changes.length} inspected)`);
+  lines.push('');
+  for (const c of r.changes) {
+    const icon = c.action === 'deleted' ? '🗑️' : c.action === 'reverted' ? '↩️' : '✅';
+    lines.push(`### ${icon} \`${c.file}\` — ${c.action}`);
+    for (const n of c.notes) lines.push(`- ${n}`);
+    lines.push('');
+  }
+
+  if (touched.length === 0) {
+    lines.push('Nothing to revert — no N1nja changes were found in this project.');
+  } else {
+    lines.push('All N1nja logging changes were reverted. Your working tree is ready to commit.');
+  }
 
   return lines.join('\n');
 }

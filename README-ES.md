@@ -195,6 +195,8 @@ Con el logging habilitado, reiniciá tu cliente MCP y ya estás listo:
 |---------|------|-------------------------------------|-------------|
 | `autoconfig` | Setup | `projectRoot` (def. cwd) | Auto-configura el logging que N1nja necesita. Detecta si hay un Logback propio y edita el XML, o agrega las properties a `application.properties`/`yml`. **Corré esto una vez, antes de `full_scan`.** |
 | `full_scan` | ⭐ Todo-en-uno | `logFile` (def. `logs/application.log`), `projectRoot` (def. cwd), `outputFile`, `config` | Parsea el log + escanea el código + escribe un `.md` con fixes listos para copiar. **Empezá por acá.** |
+| `static_scan` | Auditoría estática | `projectRoot` (def. cwd), `maxFindingsPerProject` (def. 50), `outputFile` | Audita el código en busca de antipatrones JPA **sin logs ni app corriendo**. Modo flota: apuntalo a una carpeta de microservicios y los escanea y rankea todos. Escribe un reporte `.md`. |
+| `db_top_queries` | Base de datos | `envFile`, `projectRoot`, `limit` (def. 20), `orderBy` (def. `total_time`), `minCalls`, `reset` | Devuelve las queries más caras con **estadísticas reales del servidor** (MySQL `performance_schema` / PostgreSQL `pg_stat_statements`). No necesita logging de la app. |
 | `analyze_hibernate_log` | Log | `logFile` (def. `logs/application.log`), `config` | Detecta N+1, queries duplicadas, resultados grandes, queries lentas, productos cartesianos, SELECT * y deadlocks. |
 | `find_n1_in_code` | Análisis | `projectRoot` (def. cwd) | Escanea el código Java y encuentra la entidad, campo y método exacto que causa cada problema. |
 | `find_missing_indexes` | Base de datos | `envFile`, `projectRoot` | Conecta a la DB, cruza columnas de WHERE/JOIN/ORDER BY con los índices existentes, genera sentencias `CREATE INDEX`. |
@@ -214,9 +216,13 @@ Configura el logging que N1nja necesita para capturar el SQL de Hibernate — as
 
 Escribe los archivos in-place y es **idempotente** — correrlo de nuevo no hace más cambios. Después de correrlo, reiniciá tu app, ejercitá los endpoints que disparan queries, y corré `full_scan`.
 
+Antes de tocar nada verifica que el proyecto realmente use **JPA/Hibernate** (dependencias del build, nombre del parent corporativo, imports `javax`/`jakarta.persistence`, `@Entity`, `JpaRepository`). Un servicio reactivo WebFlux + MongoDB o una lambda Python/Node recibe un reporte de **"no aplica"** en vez de config de logging inútil — pasá `force: true` para forzarlo igual. `undo` nunca se bloquea.
+
 | Parámetro | Requerido | Por defecto | Descripción |
 |---|---|---|---|
 | `projectRoot` | No | directorio de trabajo actual | Raíz del proyecto Spring Boot (donde está `src/main/resources`). |
+| `action` | No | `apply` | `apply` configura el logging; `undo` revierte todos los cambios de N1nja. |
+| `force` | No | `false` | Salta la verificación de tipo de proyecto y configura igual. |
 
 ```json
 { "projectRoot": "/ruta/a/tu-proyecto-spring-boot" }
@@ -236,9 +242,51 @@ Todos los parámetros tienen un valor por defecto razonable, así que podés lla
 | `projectRoot` | No | directorio de trabajo actual | Raíz del proyecto Spring Boot (donde está `src/main/java`). Por defecto, el directorio donde se inició el proceso del servidor MCP. |
 | `outputFile` | No | `report/n1nja-report_{timestamp}.md` | Ruta de salida personalizada para el `.md`. Cada corrida escribe un archivo nuevo con timestamp. |
 | `config` | No | — | Override de umbrales de detección (ver *Umbrales de detección*). |
+| `force` | No | `false` | Salta la verificación de tipo de proyecto. Por defecto, los proyectos sin JPA/Hibernate (servicios reactivos WebFlux/MongoDB, lambdas Python/Node, …) se omiten con un reporte de "no aplica". |
 
 ```json
 { "logFile": "logs/application.log", "projectRoot": "/ruta/a/tu-proyecto-spring-boot" }
+```
+
+---
+
+### `static_scan`
+
+Audita el proyecto **sin logs ni app corriendo**: escanea los fuentes Java y la config en busca de los antipatrones que causan N+1 y escrituras lentas — colecciones EAGER, `@ManyToMany`, múltiples `JOIN FETCH` en una misma query, `findAll()` sin paginar, `saveAll()` sin `hibernate.jdbc.batch_size`, y métodos de lectura sin `@Transactional(readOnly = true)`. Cada hallazgo incluye archivo, línea, el código ofensivo y una recomendación de fix. Usalo como primer paso de cero fricción; después habilitá el logging y corré `full_scan` sobre los peores.
+
+**Modo flota:** si `projectRoot` no es en sí un proyecto Java pero sus subdirectorios sí lo son (una carpeta llena de microservicios), escanea todos los proyectos y los rankea de peor a mejor con un score ponderado por severidad.
+
+Cada corrida además escribe el reporte a disco: `report/n1nja-static-scan_{timestamp}.md`.
+
+| Parámetro | Requerido | Por defecto | Descripción |
+|---|---|---|---|
+| `projectRoot` | No | directorio de trabajo actual | Raíz de un proyecto Spring Boot (donde está `src/main/java`), o una carpeta que contiene varios (modo flota). |
+| `maxFindingsPerProject` | No | `50` | Tope de hallazgos reportados por proyecto, los más severos primero. |
+| `outputFile` | No | `report/n1nja-static-scan_{timestamp}.md` | Ruta de salida personalizada para el `.md`. |
+
+```json
+{ "projectRoot": "/ruta/a/tu-carpeta-de-microservicios" }
+```
+
+---
+
+### `db_top_queries`
+
+Lee las estadísticas de sentencias de la propia base de datos (resumen de digests de `performance_schema` en MySQL, o `pg_stat_statements` en PostgreSQL) y devuelve las queries más caras con **timing real del servidor**: tiempo total/promedio, filas examinadas vs enviadas, y conteo de full scans. No necesita logging de la aplicación — usalo cuando el logging SQL de Hibernate está apagado, o como fuente de verdad para complementar el análisis del log.
+
+Usá `reset: true` para poner los contadores en cero, ejercitar un flujo específico, y volver a llamar para medir solo ese flujo. Las credenciales se resuelven como en las otras herramientas de DB (ver [Credenciales de base de datos](#credenciales-de-base-de-datos)).
+
+| Parámetro | Requerido | Por defecto | Descripción |
+|---|---|---|---|
+| `envFile` | No | — | Ruta a un `.env` con las credenciales `DB_*`. |
+| `projectRoot` | No | directorio de trabajo actual | Proyecto Spring del que leer `spring.datasource.*` si faltan credenciales de entorno. |
+| `limit` | No | `20` | Cuántas queries devolver. |
+| `orderBy` | No | `total_time` | Métrica de ranking: `total_time`, `avg_time`, `calls`, `rows_examined`. |
+| `minCalls` | No | `1` | Ignora sentencias ejecutadas menos veces que esto. |
+| `reset` | No | `false` | Resetea las estadísticas del servidor en vez de leerlas. |
+
+```json
+{ "orderBy": "avg_time", "limit": 10 }
 ```
 
 ---

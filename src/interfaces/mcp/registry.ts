@@ -5,8 +5,12 @@ import { watchHibernateLog } from './tools/watch-log.tool';
 import { explainQuery } from './tools/explain-query.tool';
 import { generateN1Report } from './tools/generate-report.tool';
 import { findMissingIndexes } from './tools/find-missing-indexes.tool';
+import { dbTopQueries } from './tools/db-top-queries.tool';
+import { writeMarkdownReport } from './tools/report-path';
 import { analyzeProjectForNPlusOne } from '../../core/code-analysis/project-analyzer';
-import { setupLogging } from '../../core/setup/logging-configurator';
+import { detectProject, buildNotApplicableMarkdown } from '../../core/code-analysis/project-detector';
+import { setupLogging, undoLogging } from '../../core/setup/logging-configurator';
+import { runStaticScan } from '../../core/static-analysis/static-scanner';
 import { toMarkdown } from '../../core/reporting/markdown-reporter';
 import { toPdf } from '../../core/reporting/pdf-reporter';
 
@@ -67,6 +71,29 @@ const dbProjectRootSchema = z
       'they are read from its src/main/resources/application.properties|yml ' +
       '(spring.datasource.url/username/password). Defaults to the current working directory.',
   );
+
+const forceSchema = z
+  .boolean()
+  .optional()
+  .describe(
+    'Skip the project-type check and run anyway. By default, projects with no JPA/Hibernate ' +
+      '(reactive WebFlux/MongoDB services, Python/Node lambdas, …) are detected and skipped.',
+  );
+
+/** "Not applicable" result shared by full_scan and autoconfig. */
+function notApplicableResult(
+  projectRoot: string,
+  toolName: string,
+): ToolResult | null {
+  const detection = detectProject(projectRoot);
+  if (detection.applicable) return null;
+  return {
+    content: [
+      json({ skipped: true, reason: 'not-applicable', kind: detection.kind, signals: detection.signals }),
+      text('\n\n---\n\n' + buildNotApplicableMarkdown(detection, toolName)),
+    ],
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -229,7 +256,9 @@ const fullScanTool = defineTool({
     'Use this as your first step — it replaces running analyze_hibernate_log and find_n1_in_code separately. ' +
     'If logFile is omitted, defaults to logs/application.log (Spring Boot recommended config: logging.file.name=logs/application.log). ' +
     'If projectRoot is omitted, defaults to the current working directory. ' +
-    'Each run writes a new timestamped file: report/n1nja-report_{timestamp}.md',
+    'Each run writes a new timestamped file: report/n1nja-report_{timestamp}.md. ' +
+    'If the project does not use JPA/Hibernate (reactive WebFlux/MongoDB service, Python/Node lambda, …) ' +
+    "the scan is skipped with a 'not applicable' report; pass force: true to run anyway.",
   schema: z.object({
     logFile: z.string().optional().describe('Path to the Hibernate log file. Defaults to logs/application.log.'),
     projectRoot: z
@@ -241,8 +270,13 @@ const fullScanTool = defineTool({
       .optional()
       .describe('Custom output path for the .md report. Defaults to report/n1nja-report_{timestamp}.md'),
     config: configSchema,
+    force: forceSchema,
   }),
-  run: async ({ logFile, projectRoot, outputFile, config }) => {
+  run: async ({ logFile, projectRoot = process.cwd(), outputFile, config, force }) => {
+    if (!force) {
+      const skipped = notApplicableResult(projectRoot, 'full_scan');
+      if (skipped) return skipped;
+    }
     const result = await generateN1Report({ logFile, projectRoot, outputFile, config });
     return {
       content: [
@@ -344,6 +378,13 @@ const setupLoggingTool = defineTool({
     'If no config exists at all, it creates src/main/resources/application.properties. ' +
     'It reuses a custom encoder/layout (e.g. a PII-masking layout) when one is found, and is idempotent. ' +
     'Files are written in place. Run this before full_scan. ' +
+    "Use action 'undo' to revert every change autoconfig made (before committing your repo): " +
+    'injected blocks are marker-delimited, so undo removes exactly what was added. ' +
+    'If the project imports Spring Cloud Config (configserver:), the report warns that dev/prod ' +
+    'levels may come from the central config repo and suggests LOGGING_LEVEL_* env vars as a ' +
+    'non-invasive alternative. ' +
+    'If the project does not use JPA/Hibernate (reactive WebFlux/MongoDB service, Python/Node lambda, …) ' +
+    "nothing is configured and a 'not applicable' report is returned; pass force: true to configure anyway. " +
     'If projectRoot is omitted, defaults to the current working directory.',
   schema: z.object({
     projectRoot: z
@@ -353,19 +394,144 @@ const setupLoggingTool = defineTool({
         'Absolute path to the root of the Spring Boot project (where src/main/resources is). ' +
           'Defaults to the current working directory.',
       ),
+    action: z
+      .enum(['apply', 'undo'])
+      .optional()
+      .describe("'apply' (default) configures the logging; 'undo' reverts every N1nja change."),
+    force: forceSchema,
   }),
-  run: ({ projectRoot = process.cwd() }) => {
+  run: ({ projectRoot = process.cwd(), action = 'apply', force }) => {
+    if (action === 'undo') {
+      const result = undoLogging(projectRoot);
+      return {
+        content: [
+          json({
+            action: 'undo',
+            changes: result.changes.map((c) => ({ file: c.file, action: c.action, notes: c.notes })),
+          }),
+          text('\n\n---\n\n' + result.markdownReport),
+        ],
+      };
+    }
+    if (!force) {
+      const skipped = notApplicableResult(projectRoot, 'autoconfig');
+      if (skipped) return skipped;
+    }
     const result = setupLogging(projectRoot);
     return {
       content: [
         json({
           scenario: result.scenario,
           logFile: result.logFile,
+          configServerFiles: result.configServerFiles,
           changes: result.changes.map((c) => ({
             file: c.file,
             action: c.action,
             notes: c.notes,
           })),
+        }),
+        text('\n\n---\n\n' + result.markdownReport),
+      ],
+    };
+  },
+});
+
+const staticScanTool = defineTool({
+  name: 'static_scan',
+  description:
+    'Audits a Spring Boot / JPA project WITHOUT needing logs or a running app: ' +
+    'scans the Java sources and config for anti-patterns that cause N+1 queries and slow writes — ' +
+    'EAGER collections, @ManyToMany, multiple JOIN FETCH in one query, unbounded findAll(), ' +
+    'saveAll() without hibernate.jdbc.batch_size, and read methods missing @Transactional(readOnly = true). ' +
+    'Fleet mode: if projectRoot is a folder of microservices (no src/main/java itself, but its ' +
+    'subdirectories have one), every project is scanned and ranked worst-first. ' +
+    'Use this as the zero-friction first step; then enable logging and run full_scan on the worst offenders. ' +
+    'Each run also writes the markdown report to disk: report/n1nja-static-scan_{timestamp}.md ' +
+    '(override the path with outputFile).',
+  schema: z.object({
+    projectRoot: z
+      .string()
+      .optional()
+      .describe(
+        'A Spring Boot project root (where src/main/java is), or a folder containing several ' +
+          'such projects (fleet mode). Defaults to the current working directory.',
+      ),
+    maxFindingsPerProject: z
+      .number()
+      .optional()
+      .describe('Cap of findings reported per project, most severe first. Default: 50.'),
+    outputFile: z
+      .string()
+      .optional()
+      .describe('Custom output path for the .md report. Defaults to report/n1nja-static-scan_{timestamp}.md'),
+  }),
+  run: ({ projectRoot = process.cwd(), maxFindingsPerProject, outputFile }) => {
+    const result = runStaticScan(projectRoot, { maxFindingsPerProject });
+    const reportPath = writeMarkdownReport('n1nja-static-scan', result.markdownReport, outputFile);
+    return {
+      content: [
+        json({
+          reportPath,
+          mode: result.mode,
+          scannedRoot: result.scannedRoot,
+          projects: result.projects.map((p) => ({
+            project: p.projectName,
+            score: p.score,
+            entitiesScanned: p.entitiesScanned,
+            javaFilesScanned: p.javaFilesScanned,
+            countsByType: p.countsByType,
+            findings: p.findings.map((f) => ({
+              type: f.type,
+              severity: f.severity,
+              location: `${f.file}:${f.line}`,
+              detail: f.detail,
+            })),
+          })),
+        }),
+        text(`\n\n✅ Report saved to: ${reportPath}\n\n---\n\n` + result.markdownReport),
+      ],
+    };
+  },
+});
+
+const dbTopQueriesTool = defineTool({
+  name: 'db_top_queries',
+  description:
+    "Reads the database's own statement statistics (MySQL performance_schema digest summary, " +
+    'or PostgreSQL pg_stat_statements) and returns the most expensive queries with REAL ' +
+    'server-side timing: total/avg time, rows examined vs sent, and full-scan counts. ' +
+    'Needs NO application logging — use it when Hibernate SQL logging is off or as ground truth ' +
+    'to complement the log analysis. ' +
+    "Use reset: true to zero the counters, exercise a specific flow, then call again to measure only that flow. " +
+    'DB credentials are resolved from: the envFile parameter, the DB_* environment variables ' +
+    '(or a .env in the working directory), or the Spring project application.properties/yml ' +
+    '(spring.datasource.*) under projectRoot.',
+  schema: z.object({
+    envFile: envFileSchema,
+    projectRoot: dbProjectRootSchema,
+    limit: z.number().optional().describe('How many queries to return. Default: 20.'),
+    orderBy: z
+      .enum(['total_time', 'avg_time', 'calls', 'rows_examined'])
+      .optional()
+      .describe("Ranking metric. Default: 'total_time'."),
+    minCalls: z.number().optional().describe('Ignore statements executed fewer times than this. Default: 1.'),
+    reset: z
+      .boolean()
+      .optional()
+      .describe('Reset the server-side statistics instead of reading them (measure a specific flow).'),
+  }),
+  run: async ({ envFile, projectRoot, limit, orderBy, minCalls, reset }) => {
+    const result = await dbTopQueries({ envFile, projectRoot, limit, orderBy, minCalls, reset });
+    return {
+      content: [
+        json({
+          dbType: result.dbType,
+          dbHost: result.dbHost,
+          dbName: result.dbName,
+          orderBy: result.orderBy,
+          statsReset: result.statsReset ?? false,
+          queriesReturned: result.queries.length,
+          queries: result.queries,
         }),
         text('\n\n---\n\n' + result.markdownReport),
       ],
@@ -382,4 +548,6 @@ export const tools: ToolDef[] = [
   explainSqlTool,
   findMissingIndexesTool,
   setupLoggingTool,
+  staticScanTool,
+  dbTopQueriesTool,
 ];

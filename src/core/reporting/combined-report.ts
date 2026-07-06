@@ -124,6 +124,18 @@ export function buildCombinedReport(
         lines.push(``);
       }
 
+      if (finding.queryFingerprintMatches?.length) {
+        lines.push(s.labelNativeQueryMatch);
+        for (const m of finding.queryFingerprintMatches.slice(0, 3)) {
+          const label = m.confidence === 'exact' ? s.matchExact : s.matchPaginated;
+          lines.push(
+            `- \`${m.usage.repositoryName}.${m.usage.methodName}()\` — ` +
+              `\`${m.usage.relativeFilePath}:${m.usage.lineNumber}\` (${label})`,
+          );
+        }
+        lines.push(``);
+      }
+
       if (finding.usages.length > 0) {
         // Collapse usages that resolve to the same code snippet (e.g. several
         // log lines from the same method) so we don't print the block twice.
